@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FPV LAB &mdash; Builder &amp; Simulator</title>
+<link rel="stylesheet" href="styles/app.css">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div class="brand">
+      <span class="mark"></span>
+      <span class="name">FPV LAB</span>
+      <span class="sub">builder &middot; simulator</span>
+    </div>
+    <nav id="tabs"></nav>
+    <div class="topright">
+      <div id="buildname" class="buildname">Untitled build</div>
+      <div class="cost"><span class="lbl">build cost</span><span id="cost">$0</span></div>
+      <button id="btn-save" class="ghost" title="Save build (localStorage)">Save</button>
+      <button id="btn-load" class="ghost">Garage</button>
+    </div>
+  </header>
+
+  <main id="body">
+    <!-- ============================ BUILDER ============================ -->
+    <section class="view" data-view="builder">
+      <aside class="rail" id="builder-cats"></aside>
+      <div class="main">
+        <div class="panel preview-panel">
+          <div class="panel-head">
+            <h2>Preview</h2>
+            <div class="hint">drag to orbit &middot; wheel to zoom &middot; <kbd>T</kbd> props</div>
+          </div>
+          <canvas id="gl-builder"></canvas>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Component selection</h2>
+            <div class="hint" id="builder-hint">Pick a part. Everything below updates live.</div>
+          </div>
+          <div id="parts" class="parts"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Configuration</h2></div>
+          <div id="config" class="config"></div>
+        </div>
+      </div>
+      <aside class="rail right">
+        <div class="panel sticky">
+          <div class="panel-head"><h2>Predicted performance</h2></div>
+          <div id="stats" class="stats"></div>
+          <div class="panel-head"><h2>Fit check</h2></div>
+          <div id="warnings" class="warnings"></div>
+          <button id="btn-fly" class="primary wide">Fly this build</button>
+        </div>
+      </aside>
+    </section>
+
+    <!-- ============================ SIMULATOR ========================== -->
+    <section class="view" data-view="sim">
+      <aside class="rail">
+        <div class="panel">
+          <div class="panel-head"><h2>Flight</h2></div>
+          <div class="row">
+            <button id="btn-arm" class="primary wide">Arm</button>
+          </div>
+          <div class="row">
+            <button id="btn-reset" class="ghost wide">Reset</button>
+          </div>
+          <div class="row split">
+            <label class="chk"><input type="checkbox" id="chk-pause"> <span>Pause</span></label>
+            <label class="chk"><input type="checkbox" id="chk-slow"> <span>Slow mo</span></label>
+          </div>
+          <div class="row">
+            <label class="lbl">Time scale</label>
+            <input type="range" id="rng-speed" min="0.1" max="2" step="0.05" value="1">
+            <span class="val" id="val-speed">1.00&times;</span>
+          </div>
+          <div class="panel-head"><h2>Flight mode</h2></div>
+          <div id="modes" class="seg"></div>
+          <div class="row">
+            <label class="lbl">Stick mode</label>
+            <select id="sel-stick">
+              <option value="0">Centre-release throttle</option>
+              <option value="1">Hold throttle</option>
+            </select>
+          </div>
+          <div class="panel-head"><h2>Video link</h2></div>
+          <div id="vtxcfg" class="config"></div>
+          <div class="panel-head"><h2>Control link</h2></div>
+          <div id="rxcfg" class="config"></div>
+          <div class="panel-head"><h2>Environment</h2></div>
+          <div id="envcfg" class="config"></div>
+        </div>
+      </aside>
+      <div class="main viewport-wrap">
+        <canvas id="gl"></canvas>
+        <canvas id="fpv-overlay"></canvas>
+        <div id="hud" class="hud"></div>
+        <div id="hud-fpv" class="hud fpv hidden"></div>
+        <div class="cam-switch" id="cams"></div>
+        <div id="linkpanel" class="linkpanel"></div>
+        <div id="messages" class="messages"></div>
+      </div>
+      <aside class="rail right">
+        <div class="panel sticky">
+          <div class="panel-head"><h2>Telemetry</h2></div>
+          <div id="gauges" class="gauges"></div>
+          <div id="traces" class="traces"></div>
+          <div class="row">
+            <button id="btn-csv" class="ghost wide">Export blackbox CSV</button>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <!-- ============================== TUNE ============================= -->
+    <section class="view" data-view="tune">
+      <aside class="rail">
+        <div class="panel">
+          <div class="panel-head"><h2>Tune presets</h2></div>
+          <div id="tune-lib" class="list"></div>
+          <div class="panel-head"><h2>Mode</h2></div>
+          <div id="tune-mode" class="seg"></div>
+          <div class="panel-head"><h2>Loop rate</h2></div>
+          <div id="looprate" class="config"></div>
+        </div>
+      </aside>
+      <div class="main">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>PID &amp; rates</h2>
+            <div class="hint">Betaflight-convention numbers. Setpoint is the demand, gyro is what the craft did.</div>
+          </div>
+          <div id="pid" class="pidgrid"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Filters &amp; dynamics</h2></div>
+          <div id="filters" class="pidgrid"></div>
+        </div>
+      </div>
+      <aside class="rail right">
+        <div class="panel sticky">
+          <div class="panel-head"><h2>Gyro trace</h2></div>
+          <canvas id="gyroscope" height="260"></canvas>
+          <div class="panel-head"><h2>Motor outputs</h2></div>
+          <canvas id="motorscope" height="180"></canvas>
+          <div class="panel-head"><h2>Step response</h2>
+            <div class="hint">Roll stick 0 &rarr; 0.6 &rarr; 0 for one second each.</div>
+          </div>
+          <button id="btn-step" class="ghost wide">Run step test</button>
+          <canvas id="stepscope" height="150"></canvas>
+        </div>
+      </aside>
+    </section>
+
+    <!-- ============================== RACE ============================= -->
+    <section class="view" data-view="race">
+      <aside class="rail">
+        <div class="panel">
+          <div class="panel-head"><h2>Track</h2></div>
+          <div id="tracklist" class="list"></div>
+          <div id="trackinfo" class="trackinfo"></div>
+          <div class="panel-head"><h2>Heat</h2></div>
+          <div class="row">
+            <label class="lbl">Laps</label>
+            <select id="sel-laps">
+              <option>1</option><option selected>3</option><option>5</option>
+            </select>
+          </div>
+          <div class="row">
+            <label class="lbl">Rivals</label>
+            <select id="sel-rivals">
+              <option>0</option><option selected>2</option><option>3</option><option>5</option>
+            </select>
+          </div>
+          <button id="btn-race" class="primary wide">Start heat</button>
+          <div class="btnrow">
+            <button id="btn-race-arm" class="wide primary">Arm</button>
+            <button id="btn-race-reset" class="wide">Reset</button>
+          </div>
+          <div class="panel-head"><h2>Career</h2></div>
+          <div id="career" class="stats"></div>
+        </div>
+      </aside>
+      <div class="main viewport-wrap">
+        <canvas id="gl-race"></canvas>
+        <div id="hud-race" class="hud"></div>
+        <div class="cam-switch" id="cams-race"></div>
+        <div id="racepanel" class="racepanel"></div>
+      </div>
+      <aside class="rail right">
+        <div class="panel sticky">
+          <div class="panel-head"><h2>Timing</h2></div>
+          <div id="laps" class="stats"></div>
+          <div class="panel-head"><h2>Sector trace</h2></div>
+          <canvas id="racescope" height="180"></canvas>
+          <div class="panel-head"><h2>Positions</h2></div>
+          <div id="positions" class="stats"></div>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <div id="garage" class="modal hidden">
+    <div class="modal-box">
+      <div class="panel-head">
+        <h2>Garage</h2>
+        <button id="garage-close" class="ghost">Close</button>
+      </div>
+      <div id="garage-list" class="list"></div>
+    </div>
+  </div>
+
+  <div id="help" class="modal hidden">
+    <div class="modal-box">
+      <div class="panel-head"><h2>Controls</h2>
+        <button id="help-close" class="ghost">Close</button>
+      </div>
+      <table class="keys">
+        <tr><td><kbd>&larr;</kbd> <kbd>&rarr;</kbd></td><td>Yaw</td></tr>
+        <tr><td><kbd>&uarr;</kbd> <kbd>&darr;</kbd></td><td>Pitch</td></tr>
+        <tr><td><kbd>A</kbd> <kbd>D</kbd></td><td>Roll</td></tr>
+        <tr><td><kbd>Q</kbd> <kbd>E</kbd></td><td>Throttle up / down (hold)</td></tr>
+        <tr><td><kbd>Space</kbd></td><td>Throttle (centre-release)</td></tr>
+        <tr><td><kbd>X</kbd></td><td>Zero throttle</td></tr>
+        <tr><td><kbd>Enter</kbd></td><td>Arm / disarm</td></tr>
+        <tr><td><kbd>R</kbd></td><td>Reset</td></tr>
+        <tr><td><kbd>1</kbd>&hellip;<kbd>5</kbd></td><td>Camera</td></tr>
+        <tr><td>Gamepad</td><td>Left stick = roll/pitch, triggers = throttle/yaw, A = arm</td></tr>
+      </table>
+      <p class="note">In <b>angle</b> and <b>horizon</b> mode the sticks hold an angle. In <b>acro</b>
+      they spring back and the rates below apply.</p>
+    </div>
+  </div>
+</div>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
