@@ -518,6 +518,12 @@ class App {
     const craft = sim.craft;
     const h = sim.hud();
 
+    // The FPV feed is a delayed copy of the camera, and the delay is the link's.
+    const isFpv = this.rig.mode === 'fpv';
+    // The lens sits inside the airframe, and every material on it is opaque, so
+    // flying the model and the feed from the same scene puts plates and props
+    // across the whole picture. A real feed sees none of its own craft.
+    this.drone.group.visible = !isFpv;
     this.drone.update(craft, dt);
     this.drone.group.position.set(craft.body.pos.x, craft.body.pos.y, craft.body.pos.z);
     this.drone.group.quaternion.set(craft.body.quat.x, craft.body.quat.y,
@@ -525,8 +531,6 @@ class App {
     this.fx.update(dt, craft);
     this.rig.update(craft, dt, { pilot: sim.pilotPos });
 
-    // The FPV feed is a delayed copy of the camera, and the delay is the link's.
-    const isFpv = this.rig.mode === 'fpv';
     this.rig.latencyMs = h.vtx.latency || 5;
     this.rig.pushFeedPose(craft, this.rig.latencyMs);
     this.viewport.tickWeather(dt, this.viewport.camera.position);
@@ -552,6 +556,8 @@ class App {
     sim.step(dt);
     const craft = sim.craft;
 
+    // Same rule as the workshop: the FPV camera is inside the airframe.
+    this.droneR.group.visible = this.raceRig.mode !== 'fpv';
     this.droneR.update(craft, dt);
     this.droneR.group.position.set(craft.body.pos.x, craft.body.pos.y, craft.body.pos.z);
     this.droneR.group.quaternion.set(craft.body.quat.x, craft.body.quat.y,

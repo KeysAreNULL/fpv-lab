@@ -18,7 +18,7 @@ Then open <http://localhost:8123>. Add `?debug=1` to publish diagnostics onto
 ## Tests
 
 ```sh
-node tests/physics.test.mjs    # 64 checks: prop, motor, battery, FC, body, collision
+node tests/physics.test.mjs    # 73 checks: prop, motor, battery, FC, body, collision
 node tests/frame.test.mjs      # 21 checks: body-frame signs, hover, reaction torque
 node tests/imports.mjs         # every module parses
 ```
@@ -69,6 +69,26 @@ Mixer signs follow from that frame (`MIX_TABLE` in `craft.js`):
 `tests/frame.test.mjs` asserts each of these against a thrust direction rather
 than trusting the table.
 
+**Everyplace that spawns or re-levels a craft must use `Q_LEVEL`,** not just
+`buildCraft`. `Simulation.reset()` wrote the identity quaternion, which put the
+airframe on its side in the workshop and on the race grid, with the HUD reading
+`-90°` pitch while the model lay nose-down in the dirt.
+
+### The FPV camera needs a basis, not a rotation
+
+A three.js camera looks down its own `-Z`; the nose is body `+X`. Turning it to
+face the nose takes **two** rotations, and one of them is easy to forget:
+
+| what you do | view direction | image roll |
+| --- | --- | --- |
+| `rotateY(π)` | body +Z → the ground | correct |
+| `rotateY(tilt − π/2)` | nose, tilted up | **90°: the feed lies on its side** |
+| `up = body −Z`, `lookAt(pos + forward)` | nose, tilted up | correct |
+
+So `CameraRig.fpvPose()` builds the world forward and up vectors explicitly and
+`applyFpvOrientation()` hands them to `lookAt`. Anything that reproduces the FPV
+pose elsewhere (the delayed feed pose) has to use the same basis.
+
 ## Surfaces
 
 Track and ground surfaces are `MeshStandardMaterial` with CC0 scans from
@@ -80,7 +100,7 @@ that.
 
 Everything degrades gracefully: a missing map still builds from its tint.
 
-Two rendering rules worth knowing before changing this:
+Three rendering rules worth knowing before changing this:
 
 - **`scene.environment` must be set.** A PBR material with metalness has almost
   no diffuse response — all of its look comes from reflected surroundings. With
@@ -90,6 +110,27 @@ Two rendering rules worth knowing before changing this:
   industrial fittings; dimming an outdoor sky and hoping gives a black scene.
   `applyWeather` branches on `track.interior` and uses a dedicated overhead rig,
   and suppresses fog and rain.
+- **Anything the camera sits inside has to fade.** `Viewport.render()` fades the
+  gate rings and the start pad by distance, and the craft is hidden outright in
+  FPV mode: the lens is inside the airframe and every material on it is opaque,
+  so without both the first seconds of every heat are behind coloured plastic.
+
+## The drone model
+
+`src/render/droneMesh.js` builds geometry from the same numbers the physics
+uses, which means a unit slip shows up as an absurd object. Four have been, and
+all four were found by measuring the model in Node rather than by looking at it:
+
+| symbol | unit | what it is *not* |
+| --- | --- | --- |
+| `plateArea__cm2` | cm² | divide by **1e4** for m², not 100 — `/100` made a 190 cm² plate 1.38 m across, a ten-times slab that swallowed the airframe |
+| `pitch__mm` | mm of *pitch* (109 on a 5x4.3) | not blade thickness, and not an angle: extruding by it gave 10 cm paddles, and `pitch / radius` gave a 54° blade that stood on edge |
+| `D__mm` | mm | the prop disc lies in the body **XY** plane, because the spin axis is Z (NED) — rotating the blade geometry on to an edge stops it spinning about Z at all |
+| arm direction | `+atan2(y, x)` | the mirrored sign puts both arms on the same side and the frame draws as two crossed sticks |
+
+The model is rebuilt only when the spec string changes: `build()` stores
+`JSON.stringify(spec)` because `update()` compares against a string, and
+storing the object tore the whole model down and rebuilt it every frame.
 
 ## Weather and lighting
 
@@ -146,9 +187,26 @@ rests a craft on a roof slab at `slabTop + radius`, and a bound set lower will
 drag it back down through the slab and out the floor. `tests/physics.test.mjs`
 asserts every track's ceiling clears its roof slab.
 
-`collideWorld` also ejects a body that ends up *inside* a thin slab through the
-face it entered by, not the nearest face — otherwise a craft falling at 20 m/s
-gets pushed out the bottom and lands on the floor.
+Three things about the collision sphere, all of which were wrong at some point:
+
+- **It has to reach the prop tips.** The hubs sit at 45 degrees, so their
+  distance from the centre is the arm offset times √2, not the offset. Using the
+  offset alone made the sphere 3–4 cm smaller than the airframe, and the props
+  drove through walls before anything stopped them — the opposite of what the
+  prop-strike model claims.
+- **An embedded craft comes out where it went in.** Ejecting by "which axis has
+  a non-zero velocity" picked X first, so a craft in the roof slab travelling
+  40 m/s sideways was pushed out of the roof's *85 m side*. The axis now comes
+  from how shallow the box is along it, and the face from the direction of
+  travel: falling in through a ceiling comes back out through the ceiling,
+  a craft in a thin wall comes out sideways whatever its vertical drift.
+- **Prop-strike severity decays.** It is the severity of the last hit, not a
+  record for the session; as a running maximum one crash re-reported itself for
+  the rest of the flight, and `Simulation.reset()` did not clear it.
+
+The hangar is 14 m to the underside of the roof, which is what an aircraft
+hangar actually is. At 9 m the ceiling was barely a body length above the
+racing line and capped every vertical line in the workshop.
 
 ## Units
 
