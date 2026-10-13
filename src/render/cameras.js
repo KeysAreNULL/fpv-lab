@@ -19,6 +19,10 @@ export const CAMERA_MODES = [
   { id: 'pit', label: 'Pilot view', key: '5' },
 ];
 
+// Scratch objects for the per-frame lookAt maths, so nothing allocates here.
+const TMP_TARGET = new THREE.Vector3();
+const TMP_MATRIX = new THREE.Matrix4();
+
 export class CameraRig {
   constructor(camera, viewport) {
     this.camera = camera;
@@ -57,10 +61,42 @@ export class CameraRig {
     };
   }
 
+  /** Camera pose for the FPV feed, in world space. */
+  fpvPose(craft) {
+    const b = craft.body;
+    const m = this.fpvMount(craft);
+    // The lens is a fixed part tilted up about the craft's lateral axis; it does
+    // not swing round the nose, so the mount point is used as-is.
+    const world = new THREE.Vector3(m.pos.x, m.pos.y, m.pos.z)
+      .applyQuaternion(new THREE.Quaternion(b.quat.x, b.quat.y, b.quat.z, b.quat.w))
+      .add(new THREE.Vector3(b.pos.x, b.pos.y, b.pos.z));
+    const q = new THREE.Quaternion(b.quat.x, b.quat.y, b.quat.z, b.quat.w);
+    // Body-frame up is -Z (NED). The lens is bolted to the frame, so the image's
+    // vertical is the airframe's vertical - not whatever the camera's own up is.
+    const up = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
+    const t = m.tilt * DEG;
+    const forward = new THREE.Vector3(Math.cos(t), 0, -Math.sin(t)).applyQuaternion(q);
+    return { world, up, forward, tilt: m.tilt, fov: m.fov };
+  }
+
+  /**
+   * Point a camera out of the nose.
+   *
+   * A three.js camera looks down its own -Z, so turning it to look along the
+   * airframe's +X takes two rotations, not one. A single quarter turn about Y
+   * gets the view *direction* right and leaves the camera's up pointing out of
+   * the craft's right-hand side, which renders the whole feed on its side; a
+   * half turn about Y points it at the ground instead. Building the basis
+   * explicitly is the only way to get direction and roll right together.
+   */
+  applyFpvOrientation(camera, pose) {
+    camera.up.copy(pose.up);
+    camera.lookAt(TMP_TARGET.copy(camera.position).add(pose.forward));
+  }
+
   update(craft, dt, opts = {}) {
     const b = craft.body;
     const e = attitudeOf(b.quat);
-    const q = b.quat;
     const speed = Math.hypot(b.vel.x, b.vel.y, b.vel.z);
 
     // FOV breathes with speed and throttle, and narrows as the feed degrades
@@ -69,20 +105,10 @@ export class CameraRig {
     this.fov = lerp(this.fov, target, clamp(dt * 6, 0, 1));
 
     if (this.mode === 'fpv') {
-      const m = this.fpvMount(craft);
-      const local = new THREE.Vector3(m.pos.x, m.pos.y, m.pos.z);
-      // camera tilt about the body Y axis (pitch), in the body frame
-      local.applyAxisAngle(new THREE.Vector3(0, 1, 0), -m.tilt * DEG);
-      const world = new THREE.Vector3(local.x, local.y, local.z)
-        .applyQuaternion(new THREE.Quaternion(q.x, q.y, q.z, q.w))
-        .add(new THREE.Vector3(b.pos.x, b.pos.y, b.pos.z));
-      this.camera.position.copy(world);
-      this.camera.quaternion.set(q.x, q.y, q.z, q.w);
-      this.camera.rotateY(Math.PI);            // body +X is the nose
-      this.camera.rotateX(-m.tilt * DEG);
-      this.camera.rotateZ(Math.PI);            // three.js cameras look down -Z
-      this.camera.rotateZ(Math.PI);
-      this.camera.fov = m.fov;
+      const pose = this.fpvPose(craft);
+      this.camera.position.copy(pose.world);
+      this.applyFpvOrientation(this.camera, pose);
+      this.camera.fov = pose.fov;
       this.camera.updateProjectionMatrix();
     } else if (this.mode === 'chase') {
       const behind = new THREE.Vector3(-Math.cos(e.yaw), 0, Math.sin(e.yaw)).normalize();
@@ -135,16 +161,13 @@ export class CameraRig {
    * latency. That is why a digital system feels disconnected from the craft.
    */
   pushFeedPose(craft, latencyMs) {
-    const b = craft.body;
-    const m = this.fpvMount(craft);
-    const local = new THREE.Vector3(m.pos.x, m.pos.y, m.pos.z);
-    local.applyAxisAngle(new THREE.Vector3(0, 1, 0), -m.tilt * DEG);
-    const world = new THREE.Vector3(local.x, local.y, local.z)
-      .applyQuaternion(new THREE.Quaternion(b.quat.x, b.quat.y, b.quat.z, b.quat.w))
-      .add(new THREE.Vector3(b.pos.x, b.pos.y, b.pos.z));
-    const q = new THREE.Quaternion(b.quat.x, b.quat.y, b.quat.z, b.quat.w);
+    const pose = this.fpvPose(craft);
+    // The delayed pose carries the *orientation* the lens would have had, which
+    // for a nose-mounted camera is the airframe's, not a lookAt result.
+    const quat = new THREE.Quaternion().setFromRotationMatrix(
+      TMP_MATRIX.lookAt(pose.world, TMP_TARGET.copy(pose.world).add(pose.forward), pose.up));
     this._pending.push({
-      at: latencyMs / 1000, pos: world.clone(), quat: q.clone(), fov: m.fov,
+      at: latencyMs / 1000, pos: pose.world.clone(), quat, fov: pose.fov,
     });
     while (this._pending.length > 12) this._pending.shift();
   }
@@ -283,7 +306,7 @@ export function drawLinkBar(canvas, budget, opts = {}) {
   ctx.clearRect(0, 0, w, h);
 
   if (!budget) {
-    ctx.fillStyle = '#5a6672';
+    ctx.fillStyle = '#8695a4';
     ctx.font = '11px ui-monospace, monospace';
     ctx.fillText('no link', 8, 16);
     return;
@@ -308,7 +331,7 @@ export function drawLinkBar(canvas, budget, opts = {}) {
     const positive = val >= 0;
     ctx.fillStyle = positive ? '#4fd18b' : '#e0736a';
     ctx.fillRect(78, y - 8, bw, 9);
-    ctx.fillStyle = '#8a99a6';
+    ctx.fillStyle = '#9fb0bd';
     ctx.fillText(label, 4, y);
     ctx.fillStyle = '#c8d4de';
     ctx.fillText(`${val >= 0 ? '+' : ''}${val.toFixed(0)}`, 80 + bw, y);

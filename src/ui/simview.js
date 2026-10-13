@@ -395,11 +395,11 @@ export class SimView {
     c.appendChild(el('h3', { text: 'Video link' }));
     c.appendChild(el('div', { class: 'sig' }, [
       el('span', { class: 'ch', text: `${(v.rssi || 0).toFixed(0)} dBm` }),
-      el('span', { style: { color: '#63707e' }, text: `${v.quality > 0.6 ? 'good' : v.quality > 0.2 ? 'noisy' : 'lost'}` }),
-      el('span', { style: { marginLeft: 'auto', color: '#63707e' }, text: `${v.freq} MHz` }),
+      el('span', { style: { color: '#8695a4' }, text: `${v.quality > 0.6 ? 'good' : v.quality > 0.2 ? 'noisy' : 'lost'}` }),
+      el('span', { style: { marginLeft: 'auto', color: '#8695a4' }, text: `${v.freq} MHz` }),
     ]));
     c.appendChild(el('div', { class: 'sig' }, [
-      el('span', { style: { color: '#8a9aa8' }, text: v.channel }),
+      el('span', { style: { color: '#9fb0bd' }, text: v.channel }),
     ]));
 
     const cv = el('canvas');
@@ -409,27 +409,27 @@ export class SimView {
     c.appendChild(el('div', { class: 'sep' }));
     c.appendChild(el('h3', { text: 'Control link' }));
     c.appendChild(el('div', { class: 'sig' }, [
-      el('span', { class: rc.lq > 0.6 ? 'ch' : '', style: rc.lq > 0.6 ? {} : { color: '#e0a04a' },
+      el('span', { class: rc.lq > 0.6 ? 'ch' : '', style: rc.lq > 0.6 ? {} : { color: '#eab463' },
         text: `${(rc.lq * 100).toFixed(0)}% LQ` }),
-      el('span', { style: { marginLeft: 'auto', color: '#63707e' }, text: `${rc.rssi.toFixed(0)} dBm` }),
+      el('span', { style: { marginLeft: 'auto', color: '#8695a4' }, text: `${rc.rssi.toFixed(0)} dBm` }),
     ]));
     c.appendChild(el('div', { class: 'sig' }, [
-      el('span', { style: { color: '#8a9aa8' }, text: rc.protocol }),
-      el('span', { style: { marginLeft: 'auto', color: '#63707e' }, text: `${rc.latency.toFixed(1)} ms` }),
+      el('span', { style: { color: '#9fb0bd' }, text: rc.protocol }),
+      el('span', { style: { marginLeft: 'auto', color: '#8695a4' }, text: `${rc.latency.toFixed(1)} ms` }),
     ]));
 
     // Obstacles in the way, in plain language.
     const b = v.budget;
     if (b && b.segments && b.segments.length) {
       const mats = b.segments.map((s) => `${s.material}${s.grazing ? ' (grazing)' : ''} -${s.db.toFixed(0)}dB`);
-      c.appendChild(el('div', { style: { marginTop: '5px', color: '#e0a04a', fontSize: '9.5px' },
+      c.appendChild(el('div', { style: { marginTop: '5px', color: '#eab463', fontSize: '9.5px' },
         text: 'In the way: ' + mats.join(', ') }));
     } else if (b && b.diff > 2) {
-      c.appendChild(el('div', { style: { marginTop: '5px', color: '#e0a04a', fontSize: '9.5px' },
+      c.appendChild(el('div', { style: { marginTop: '5px', color: '#eab463', fontSize: '9.5px' },
         text: `NLoS: ${b.diff.toFixed(0)} dB of diffraction loss` }));
     }
     if (h.env.windSpeed > 0.5) {
-      c.appendChild(el('div', { style: { marginTop: '4px', color: '#63707e', fontSize: '9.5px' },
+      c.appendChild(el('div', { style: { marginTop: '4px', color: '#8695a4', fontSize: '9.5px' },
         text: `wind ${h.env.windSpeed.toFixed(1)} m/s ${h.env.windDir.toFixed(0)}°` }));
     }
   }

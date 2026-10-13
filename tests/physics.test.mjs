@@ -316,6 +316,29 @@ console.log('\n--- World collision ---');
   collideWorld(rising, [slab], R, 0.3, 0.6);
   check('a craft moving up inside a slab is not launched out the bottom',
     rising.pos.y < slab.min.y, `y ${rising.pos.y.toFixed(3)}`);
+  check('a craft moving up inside a slab keeps a sane velocity',
+    Math.abs(rising.vel.y) < 5, `vy ${rising.vel.y.toFixed(2)} m/s`);
+
+  // Choosing the exit axis by velocity rather than by how shallow the box is
+  // along it throws the craft clean across the arena: embedded in the roof with
+  // 40 m/s of sideways travel, the old rule pushed it out of the roof's 85 m
+  // *side*, forty metres from where it had been.
+  for (const [px, pz, vx, vz] of [[0, 0, 40, 0], [60, 40, -40, 30]]) {
+    const b = mkBody(px, 9.30, pz, vx, 2, vz);
+    collideWorld(b, [slab], R, 0.3, 0.6);
+    check(`a roof graze at (${px}, ${pz}) ejects downward, not sideways`,
+      Math.abs(b.pos.x - px) < 1e-6 && Math.abs(b.pos.z - pz) < 1e-6
+        && b.pos.y < slab.min.y,
+      `moved to ${b.pos.x.toFixed(2)}, ${b.pos.y.toFixed(2)}, ${b.pos.z.toFixed(2)}`);
+  }
+  // ...and a thin wall embedded with a little vertical drift still comes out
+  // sideways, because along X is where that box is shallow.
+  const thin = { min: { x: -30.6, y: 0, z: -22 }, max: { x: -29.4, y: 5.2, z: 22 } };
+  const inWall = mkBody(-30, 2.5, 0, 20, 0.4, 0);
+  collideWorld(inWall, [thin], R, 0.3, 0.6);
+  check('a wall hit with vertical drift ejects sideways',
+    Math.abs(inWall.pos.x - (thin.min.x - R)) < 1e-6 && Math.abs(inWall.pos.y - 2.5) < 1e-6,
+    `x ${inWall.pos.x.toFixed(3)}, y ${inWall.pos.y.toFixed(3)}`);
 
   // A wall stops the craft at radius distance and reports the impact speed.
   const wall = { min: { x: -84.8, y: 0, z: -75 }, max: { x: -83.2, y: 9.2, z: 75 } };
@@ -340,7 +363,37 @@ console.log('\n--- World collision ---');
       const top = roof.y + roof.sy / 2;
       check(`${t.name}: soft ceiling clears the roof slab`,
         t.bounds.ceiling >= top, `ceiling ${t.bounds.ceiling}, slab top ${top.toFixed(2)}`);
+      // ...and the soft ceiling must not be the thing you actually hit, either:
+      // it should sit above the slab with room for the craft to rest under it.
+      check(`${t.name}: a craft can rest under the roof`,
+        (roof.y - roof.sy / 2) - top < 20,
+        `roof underside ${(roof.y - roof.sy / 2).toFixed(2)}`);
     }
+  }
+
+  // The collision sphere has to reach the prop tips, not the arm offsets: the
+  // hubs sit at 45 degrees, so their distance from the centre is the offset
+  // times sqrt(2), and stopping at the offset alone let the props drive through
+  // a wall a good 3-4 cm before anything happened.
+  for (const frame of ['f-5-race', 'f-toothpick-3', 'f-x-10']) {
+    const c = buildCraft({ ...DEFAULTS, frame, motorKvIndex: 0, cycles: 0 });
+    const hub = c.props[0].propPos;
+    const tip = Math.hypot(hub.x, hub.y) + c.prop.D__mm / 2000;
+    check(`${c.frame.name}: collision sphere reaches the prop tips`,
+      Math.abs(c.collisionRadius - tip) < 1e-6,
+      `sphere ${c.collisionRadius.toFixed(3)} m, tips ${tip.toFixed(3)} m`);
+  }
+
+  // A prop strike is the severity of the last hit, not a record for the session:
+  // it used to be a running maximum that no reset ever cleared, so one crash
+  // re-reported itself for the rest of the flight.
+  {
+    const c = buildCraft({ ...DEFAULTS, motorKvIndex: 0, cycles: 0 });
+    const env = new Environment();
+    c.propStrike = 22;
+    for (let i = 0; i < 32000; i++) stepCraft(c, 1 / 8000, env, { x: 0, y: 0, z: 0, throttle: 0 }, {});
+    check('a prop strike decays when nothing is being hit',
+      c.propStrike < 0.5, `strike ${c.propStrike.toFixed(2)} after 4 s`);
   }
 }
 

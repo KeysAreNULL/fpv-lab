@@ -97,14 +97,17 @@ export const TRACKS = [
     ambient: 0.55,
     key: { dir: [0.4, 0.9, 0.2], color: 0xfff2e0, intensity: 1.1 },
     fill: { color: 0x6f7d94, intensity: 0.5 },
-    roof: { y: 9.5, material: 'metal' },
+    // A real hangar is 12-20 m to the underside of the truss. At 9 m the ceiling
+    // was barely a body length above the racing line, which made the workshop
+    // feel like a corridor and capped every vertical line in the sim.
+    roof: { y: 14.4, material: 'metal' },
     // The shell is fully modelled as obstacles, and those colliders are
     // authoritative: the roof slab rests a craft at 9.50 + radius. The soft
     // bound is only a backstop for anything that escapes, so it must sit
     // *outside* the steel. Put it inside and the two fight - collideWorld
     // ejects a craft onto the roof and containInBounds drags it back through
     // the slab, straight through to the floor.
-    bounds: { half: 83.2, ceiling: 10.0 },
+    bounds: { half: 83.2, ceiling: 14.6 },
     start: { x: -46, y: 1.3, z: 34 },
     pilot: { x: -52, y: 1.7, z: 44 },
     waypoints: [
@@ -113,11 +116,11 @@ export const TRACKS = [
       { x: -34, y: 2.4, z: 12 },
     ],
     obstacles: [
-      box(0, 9.3, 0, 170, 0.4, 150, 'metal'),                       // roof slab (underside 9.1)
-      box(-84, 4.6, 0, 1.6, 9.2, 150, 'metal'),                      // west wall
-      box(84, 4.6, 0, 1.6, 9.2, 150, 'metal'),                       // east wall
-      box(0, 4.6, -74, 170, 9.2, 1.6, 'metal'),                      // north wall
-      box(0, 4.6, 74, 170, 9.2, 1.6, 'metal'),                       // south wall
+      box(0, 14.2, 0, 170, 0.4, 150, 'metal'),                      // roof slab (underside 14.0)
+      box(-84, 7.0, 0, 1.6, 14.0, 150, 'metal'),                    // west wall
+      box(84, 7.0, 0, 1.6, 14.0, 150, 'metal'),                     // east wall
+      box(0, 7.0, -74, 170, 14.0, 1.6, 'metal'),                    // north wall
+      box(0, 7.0, 74, 170, 14.0, 1.6, 'metal'),                     // south wall
       // internal partitions: drywall with a doorway gap
       box(-30, 2.6, 6, 1.2, 5.2, 44, 'drywall'),
       box(18, 2.6, 10, 1.2, 5.2, 40, 'drywall'),

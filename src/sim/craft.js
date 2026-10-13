@@ -228,8 +228,14 @@ export function buildCraft(spec, opts = {}) {
   craft.physicsHz = physicsHz;
   craft.currentA = 0;
   craft.thrustVector = v3();
-  // Collision: props reach out to about the prop radius beyond the hubs.
-  craft.collisionRadius = a + propSpec.D__mm / 2000 * 0.95;
+  // Collision: the props reach out to the hub distance plus a prop radius, and
+  // the hub distance is the full diagonal offset (hubs sit at 45 degrees, so it
+  // is the offset times sqrt(2), not the offset itself). Using the offset alone
+  // made the sphere 3-4 cm smaller than the airframe, so a craft visibly drove
+  // its props through a wall before anything stopped it - which is the opposite
+  // of what the prop-strike model claims.
+  craft.propTipRadius = Math.hypot(hubs[0].x, hubs[0].y) + propSpec.D__mm / 2000;
+  craft.collisionRadius = craft.propTipRadius;
   craft.colliders = opts.colliders || [];
   craft.propStrike = 0;
   body.updateRotation();
@@ -479,12 +485,17 @@ export function stepCraft(craft, dt, env, sticks, opts = {}) {
     craft.impact = hit;
     // A prop strike above about 6 m/s is a broken arm and a hole in the frame.
     const severity = hit.impact;
-    craft.propStrike = Math.max(craft.propStrike || 0, severity);
+    craft.propStrike = Math.max(severity, (craft.propStrike || 0) - dt * 8);
     if (severity > 6) {
       body.omega.x += (Math.random() - 0.5) * severity * 0.9;
       body.omega.z += (Math.random() - 0.5) * severity * 0.9;
       if (craft.onImpact) craft.onImpact(severity);
     }
+  } else {
+    // Fade the last strike instead of keeping it for the rest of the session:
+    // it is only ever read as "how bad was the last one", and a value that
+    // never decays re-reports a single crash for ever.
+    craft.propStrike = Math.max(0, (craft.propStrike || 0) - dt * 8);
   }
   const wall = containInBounds(body, env && env.bounds, craft.collisionRadius * 0.6);
   if (wall > 3) craft.propStrike = Math.max(craft.propStrike || 0, wall * 0.6);

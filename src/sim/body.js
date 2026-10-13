@@ -286,39 +286,44 @@ export function collideWorld(body, boxes, radius, restitution = 0.28, friction =
         // The centre is inside the box. Nudging it out by `radius` is not
         // enough when the box is thick, and picking the exit face purely by
         // depth can shove the body out through the *far* side - which is how a
-        // craft ends up under a ceiling it should be resting on. So eject it
-        // properly: pick an axis, then teleport it just outside that face.
-        const depths = [p.x - b.min.x, b.max.x - p.x, p.y - b.min.y, b.max.y - p.y,
-          p.z - b.min.z, b.max.z - p.z];
-        // axis 0 = x-, 1 = x+, 2 = y-, 3 = y+, 4 = z-, 5 = z+
-        // Ties go to the positive face, and the positive-Y face in particular:
-        // a craft embedded in a slab with no velocity has almost always fallen
-        // in from above, so resting on top is the physically sane outcome.
-        let best = 0;
-        for (let k = 1; k < 6; k++) if (depths[k] <= depths[best]) best = k;
-        const AX = ['x', 'x', 'y', 'y', 'z', 'z'];
-        const SG = [-1, 1, -1, 1, -1, 1];
-        // If the body is moving, it entered through the face opposite to its
-        // travel, so put it back out that way. Ejecting through the near face
-        // instead drives it deeper on the next substep, and for a thin slab
-        // like a hangar roof that means straight through to the floor.
-        const v = body.vel;
-        const entry = [[0, 1], [2, 3], [4, 5]].find(([lo, hi]) => (
-          (AX[lo] === 'x' && Math.abs(v.x) > 1e-4)
-          || (AX[lo] === 'y' && Math.abs(v.y) > 1e-4)
-          || (AX[lo] === 'z' && Math.abs(v.z) > 1e-4)));
-        if (entry) {
-          const [lo, hi] = entry;
-          const c = AX[lo];
-          // Travelling negative means it came in over the +face.
-          best = v[c] < 0 ? hi : lo;
+        // craft ends up under a ceiling it should be resting on.
+        //
+        // Two rules, in order. Which *axis* comes from how shallow the box is
+        // along it: the shortest way out of a slab is along the slab. Choosing
+        // that by velocity instead is what used to go wrong - a craft 40 m/s
+        // sideways and 2 m/s up, embedded in the hangar roof, was ejected out
+        // of the roof's 85 m *side*, 40 m from where it had been. Which *face*
+        // on that axis comes from the direction of travel, so a craft that fell
+        // in through a ceiling comes back out through the ceiling and not out
+        // of the floor.
+        const AXES = ['x', 'y', 'z'];
+        let axis = 0, shallowest = Infinity;
+        for (let i = 0; i < 3; i++) {
+          const k = AXES[i];
+          const near = Math.min(p[k] - b.min[k], b.max[k] - p[k]);
+          if (near < shallowest) { shallowest = near; axis = i; }
         }
-        const ax = AX[best], sg = SG[best];
+        const ax = AXES[axis];
+        const v = body.vel[ax];
+        // Travelling along +ax means it came in through the low face, so it
+        // goes back out that way - and vice versa. Standing still, take the
+        // face it is nearest to, preferring the top of a slab: a craft that is
+        // embedded with no velocity has almost always fallen in from above.
+        let sg;
+        if (v > 1e-4) sg = -1;
+        else if (v < -1e-4) sg = 1;
+        else sg = (p[ax] - b.min[ax]) <= (b.max[ax] - p[ax]) ? -1 : 1;
         p[ax] = (sg > 0 ? b.max[ax] : b.min[ax]) + sg * radius;
-        d = 0;
-        dx = ax === 'x' ? sg : 0;
-        dy = ax === 'y' ? sg : 0;
-        dz = ax === 'z' ? sg : 0;
+        // Leave `d` at the radius so the normal is the face it was pushed out
+        // through. With d left at zero the normal came out as (0,0,0), so an
+        // embedded craft kept its full inbound velocity and never registered an
+        // impact - it shot straight back into the box on the next tick. The
+        // offset has to be a real length here, because everything below divides
+        // by d to get a unit normal.
+        d = radius;
+        dx = ax === 'x' ? sg * radius : 0;
+        dy = ax === 'y' ? sg * radius : 0;
+        dz = ax === 'z' ? sg * radius : 0;
       }
       const inv = d > 1e-6 ? 1 / d : 0;
       const nx = dx * inv, ny = dy * inv, nz = dz * inv;

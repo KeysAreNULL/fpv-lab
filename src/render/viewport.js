@@ -389,6 +389,7 @@ export class Viewport {
         color: col, transparent: true, opacity: 0.3,
         roughness: 0.6, metalness: 0,
         emissive: col, emissiveIntensity: 0.35, side: THREE.DoubleSide,
+        depthWrite: false,
       });
       const bar = new THREE.Mesh(new THREE.TorusGeometry(r, 0.035, 6, 4), mat);
       bar.rotation.z = Math.PI / 4;
@@ -404,12 +405,13 @@ export class Viewport {
     // Start pad. Lit rather than MeshBasicMaterial: the chase camera sits barely
     // a metre behind the craft on the grid, so a full-brightness unlit ring
     // fills half the view as a flat green slab. As a lit, partly transparent
-    // marking it reads as paint on the floor.
+    // marking it reads as paint on the floor - and it is faded out entirely when
+    // the camera is over it, because the craft is parked right on top of it.
     const pad = new THREE.Mesh(
-      new THREE.RingGeometry(0.5, 0.85, 32),
+      new THREE.RingGeometry(0.34, 0.62, 32),
       new THREE.MeshStandardMaterial({
-        color: 0x3f9a6a, transparent: true, opacity: 0.4,
-        roughness: 0.9, metalness: 0, side: THREE.DoubleSide,
+        color: 0x3f9a6a, transparent: true, opacity: 0.32,
+        roughness: 0.9, metalness: 0, side: THREE.DoubleSide, depthWrite: false,
       }));
     pad.rotation.x = -Math.PI / 2;
     pad.position.set(track.start.x, 0.02, track.start.z);
@@ -437,26 +439,39 @@ export class Viewport {
       // Capped well below opaque: the active gate is the one you are flying
       // through, and at 0.95 it is a wall of colour across the whole view.
       g.userData.base = active ? 0.5 : 0.18;
-      g.children[0].material.opacity = g.userData.base;
+      // Opacity belongs to the near-fade pass, which runs inside render(); this
+      // only sets the target it fades towards.
       g.children[0].material.emissiveIntensity = active ? 0.55 : 0.25;
       g.scale.setScalar(active ? 1.12 : 1);
     }
   }
 
   /**
-   * Fades gates the camera is sitting inside. On the grid the chase camera is
-   * within a metre of the start ring, so without this the first seconds of every
+   * Fades the ground markings the camera is sitting inside. On the grid the
+   * chase camera is within a metre of the start ring and directly over the start
+   * pad - the craft is parked on it - so without this the first seconds of every
    * heat are behind a sheet of coloured plastic.
    */
   _fadeNearGates(cam) {
-    if (!this.gates || !cam) return;
+    if (!cam) return;
     const cp = cam.position;
-    for (const g of this.gates) {
-      const base = g.userData.base != null ? g.userData.base : 0.2;
-      const d = Math.hypot(g.position.x - cp.x, g.position.y - cp.y, g.position.z - cp.z);
-      const f = Math.min(1, Math.max(0, (d - 0.9) / 2.2));
-      g.children[0].material.opacity = base * f;
-      g.visible = f > 0.01;
+    if (this.gates) {
+      for (const g of this.gates) {
+        const base = g.userData.base != null ? g.userData.base : 0.2;
+        const d = Math.hypot(g.position.x - cp.x, g.position.y - cp.y, g.position.z - cp.z);
+        const f = Math.min(1, Math.max(0, (d - 0.9) / 2.2));
+        g.children[0].material.opacity = base * f;
+        g.visible = f > 0.01;
+      }
+    }
+    // The pad is flat on the floor, so only the horizontal offset matters: a
+    // camera 40 m up looking down at the start box should still see it.
+    const pad = this.startPad;
+    if (pad) {
+      const d = Math.hypot(pad.position.x - cp.x, pad.position.z - cp.z);
+      const near = Math.min(1, Math.max(0, (d - 0.45) / 1.6));
+      pad.material.opacity = 0.32 * near;
+      pad.visible = near > 0.01;
     }
   }
 

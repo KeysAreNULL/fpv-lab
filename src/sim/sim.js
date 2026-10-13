@@ -9,7 +9,7 @@
 // iteration can behave the same on a laptop and on a fast machine.
 
 import { clamp, lerp, RAD, DEG } from '../core/math.js';
-import { buildCraft, stepCraft, analyseBuild, attitudeOf, GEAR_HEIGHT } from './craft.js';
+import { buildCraft, stepCraft, analyseBuild, attitudeOf, GEAR_HEIGHT, Q_LEVEL } from './craft.js';
 import { Environment } from './environment.js';
 import { VideoLink, RadioLink, RFWorld } from './rf.js';
 import { Telemetry, makeTraces } from './telemetry.js';
@@ -275,10 +275,15 @@ export class Simulation {
     c.body.pos = { x: opts.x != null ? opts.x : 0, y: opts.y != null ? opts.y : GEAR_HEIGHT, z: opts.z != null ? opts.z : 0 };
     c.body.vel = { x: 0, y: 0, z: 0 };
     c.body.omega = { x: 0, y: 0, z: 0 };
-    c.body.quat = { x: 0, y: 0, z: 0, w: 1 };
+    // Level is Q_LEVEL, not the identity quaternion. The body frame is
+    // aerospace NED and the world is Y-up, so identity means nose-down 90
+    // degrees: the airframe spawns on its side and the HUD reads -90 deg pitch.
+    c.body.quat = { x: Q_LEVEL.x, y: Q_LEVEL.y, z: Q_LEVEL.z, w: Q_LEVEL.w };
     c.body.updateRotation();
     c.fc.armed = false;
     c.fc.reset();
+    c.propStrike = 0;
+    this.propStrikeAt = null;
     if (opts.rebuildBattery) c.battery.usableAh = c.battery.capacityAh;
     this.input.reset();
     this.rc.clear();
@@ -334,7 +339,7 @@ export class Simulation {
     craft.body.pos.y = 0.30;
     craft.body.vel = { x: 0, y: 0, z: 0 };
     craft.body.omega = { x: 0, y: 0, z: 0 };
-    craft.body.quat = { x: 0, y: 0, z: 0, w: 1 };
+    craft.body.quat = { x: Q_LEVEL.x, y: Q_LEVEL.y, z: Q_LEVEL.z, w: Q_LEVEL.w };
     craft.body.updateRotation();
   }
 

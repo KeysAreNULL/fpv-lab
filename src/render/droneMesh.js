@@ -44,7 +44,6 @@ export class DroneModel {
     const g = this.group;
     const frame = craft.frame, motorS = craft.motor, propS = craft.prop, battS = craft.battSpec;
     const hubs = craft.props.map((p) => p.propPos);
-    const a = Math.abs(hubs[0].x);
     const armLen = Math.hypot(hubs[0].x, hubs[0].y);
 
     const carbon = mat(MAT.carbon);
@@ -52,7 +51,11 @@ export class DroneModel {
     const alu = mat(MAT.alu);
 
     /* --- frame plates: bottom and top, sized from the real plate area */
-    const plateSide = Math.sqrt(frame.plateArea__cm2 / 100) * 1.0;
+    // cm^2 -> m^2 is /1e4. Dividing by 100 made a 190 cm2 plate 1.38 m across,
+    // a ten-times oversize slab that swallowed the whole airframe: the props and
+    // motors ended up as four bumps at the corners of a huge square, which read
+    // as "the props are diagonal to the quad".
+    const plateSide = Math.sqrt(frame.plateArea__cm2 / 1e4);
     const bottomZ = 0.0008;
     const topZ = -frame.stackHeight__mm / 1000;
     const plates = new THREE.Mesh(new THREE.BoxGeometry(plateSide, plateSide, 0.0018), carbon);
@@ -63,14 +66,16 @@ export class DroneModel {
     g.add(top);
 
     /* --- arms */
+    // The box runs along its local X, and it is centred on the halfway point of
+    // the hub offset, so a rotation of +atan2(y, x) lays it from the centre out
+    // to the motor. The sign matters: with -atan2 the left and right arms
+    // mirrored onto each other and the frame drew as two crossed sticks.
     const armGeo = new THREE.BoxGeometry(armLen * 2, 0.011, 0.016);
     for (let i = 0; i < 4; i++) {
       const h = hubs[i];
       const arm = new THREE.Mesh(armGeo, carbonL);
       arm.position.set(h.x / 2, h.y / 2, h.z * 0.5);
-      arm.rotation.z = Math.atan2(-h.y, h.x) - Math.PI / 2 + Math.PI / 2;
-      // orient the arm along the hub direction
-      arm.rotation.z = -Math.atan2(h.y, h.x);
+      arm.rotation.z = Math.atan2(h.y, h.x);
       g.add(arm);
     }
 
@@ -94,16 +99,18 @@ export class DroneModel {
     g.add(strap);
 
     /* --- camera pod, tilted like the real one */
+    // The body frame is NED with +X out of the nose, so the lens points along +X
+    // and the tilt is a rotation about the lateral (+Y) axis: nose-up tilt.
     const cam = new THREE.Group();
     const bodyC = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.019, 0.019), mat(MAT.black));
     cam.add(bodyC);
     const lens = new THREE.Mesh(
       new THREE.CylinderGeometry(0.006, 0.007, 0.008, 12), mat(0x101418));
-    lens.rotation.x = Math.PI / 2;
-    lens.position.z = 0.013;
+    lens.rotation.z = -Math.PI / 2;          // cylinder axis Y -> X (the nose)
+    lens.position.x = 0.013;
     cam.add(lens);
     cam.position.set(0.024, 0, topZ - 0.022);
-    cam.rotation.x = -(frame.camTilt__deg || 20) * Math.PI / 180;
+    cam.rotation.y = (frame.camTilt__deg || 20) * Math.PI / 180;
     g.add(cam);
     this.cameraPod = cam;
 
@@ -158,10 +165,22 @@ export class DroneModel {
       this.props.push(prop);
     }
 
-    this.built = craft.spec;
+    // The key has to be the *stringified* spec: `update` compares against a string,
+    // and storing the object here made the test fail every frame, which tore the
+    // whole model down and rebuilt it 60 times a second.
+    this.built = JSON.stringify(craft.spec);
     return this;
   }
 
+  /**
+   * One prop: blades laid out in the disc plane, hub on the spin axis.
+   *
+   * The blade outline is drawn in the XY plane and extruded along Z, which is
+   * exactly the disc plane of the airframe (the body frame is NED, so the spin
+   * axis is Z). Rotating that geometry on to an edge instead stands the blades
+   * up like fins: they then cannot spin about Z at all, because Z lies in their
+   * plane, and the prop reads as a cross of standing paddles instead of a disc.
+   */
   _buildProp(spec) {
     const D = spec.D__mm / 1000;
     const grp = new THREE.Group();
@@ -175,21 +194,33 @@ export class DroneModel {
     shape.quadraticCurveTo(r * 1.01, 0, r, r * 0.035);
     shape.bezierCurveTo(r * 0.8, r * 0.12, r * 0.45, r * 0.16, r * 0.14, r * 0.09);
     shape.closePath();
+    // Blade *thickness*, scaled off the diameter: a 5" blade is ~1.5 mm.
+    // `pitch__mm` is the prop's geometric pitch (109 mm for a 5x4.3), not a
+    // thickness - extruding by it made each blade a 10 cm slab, as thick as the
+    // whole airframe.
+    const depth = Math.max(0.0012, D * 0.014);
     const geo = new THREE.ExtrudeGeometry(shape, {
-      depth: spec.pitch__mm / 1000 * 0.9, bevelEnabled: false, curveSegments: 8,
+      depth, bevelEnabled: false, curveSegments: 8,
     });
-    geo.rotateX(-Math.PI / 2);
+    geo.translate(0, 0, -depth / 2);      // centre the blade on the disc plane
+    // Pitch angle from the real geometric pitch at the 0.75R station. That is
+    // genuinely steep (~49 degrees on a 5x4.3), which on a model reads as a
+    // blade standing on edge, so take a fraction of it: enough to see the
+    // blade is pitched, little enough that the disc still reads as a disc.
+    const pitchAngle = clamp(Math.atan2(spec.pitch__mm / 1000, 0.75 * D) * 0.35, 0.06, 0.30);
     for (let b = 0; b < blades; b++) {
       const blade = new THREE.Mesh(geo, mProp);
+      // Spin about the hub axis first, then pitch about the blade's own radial
+      // axis - which is X after the spin, so the pitch leans into the relative
+      // wind rather than rolling the blade.
       blade.rotation.z = (b / blades) * Math.PI * 2;
-      blade.rotation.x = (spec.pitch__mm / 1000 / (D / 2)) * 0.55;  // visible pitch angle
-      blade.scale.z = 1;
+      blade.rotation.x = pitchAngle;
       grp.add(blade);
     }
     const hub = new THREE.Mesh(
       new THREE.CylinderGeometry(spec.hub__mm / 2000, spec.hub__mm / 2000, 0.004, 12),
       mat(MAT.propB));
-    hub.rotation.x = Math.PI / 2;
+    hub.rotation.x = Math.PI / 2;      // cylinder axis Y -> Z (the spin axis)
     grp.add(hub);
     return grp;
   }
@@ -206,9 +237,11 @@ export class DroneModel {
     for (let i = 0; i < 4; i++) {
       const omega = craft.motors[i].omega;
       const blur = Math.abs(omega) * dt / (Math.PI * 2);
-      this.props[i].rotation.z += omega * dt;
+      // The prop's own spin sign: +1 is counter-clockwise seen from above, which
+      // in this frame (Z down) is a *negative* rotation about Z. Without it all
+      // four props turned the same way and the model contradicted the physics.
+      this.props[i].rotation.z -= omega * dt * (craft.props[i].axis || 1);
       const vis = blur > 0.35;
-      this.props[i].visible = true;
       this.props[i].children.forEach((c) => {
         if (c.material && c.material.transparent !== undefined) {
           c.material.transparent = vis;

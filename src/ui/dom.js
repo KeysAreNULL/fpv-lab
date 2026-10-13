@@ -94,9 +94,9 @@ export class Scope {
   constructor(canvas, opts = {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.bg = opts.bg || '#0a0d12';
-    this.grid = opts.grid || 'rgba(120,150,180,0.10)';
-    this.axis = opts.axis || 'rgba(120,150,180,0.18)';
+    this.bg = opts.bg || '#1a2029';
+    this.grid = opts.grid || 'rgba(160,185,210,0.14)';
+    this.axis = opts.axis || 'rgba(160,185,210,0.24)';
     this.pad = opts.pad || { l: 30, r: 6, t: 8, b: 14 };
     this.dpr = Math.min(2, window.devicePixelRatio || 1);
   }
