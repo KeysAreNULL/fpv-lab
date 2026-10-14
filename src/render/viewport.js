@@ -7,7 +7,9 @@
 
 import * as THREE from '../../vendor/three.module.js';
 import { clamp, lerp } from '../core/math.js';
-import { surfaceMaterial, groundMaterial, scaleBoxUV, preloadTextures } from './materials.js';
+import { groundMaterial, preloadTextures } from './materials.js';
+import { SkySystem } from './sky.js';
+import { Scenery } from './scenery.js';
 import { getWeather, sunVector, WEATHER } from '../data/weather.js';
 
 export class Viewport {
@@ -49,7 +51,15 @@ export class Viewport {
     this.scene.add(this.ambient);
 
     this.weather = getWeather('clear');
+    this.weatherId = 'clear';
     this.rain = null;
+
+    // Open sky. The dome replaces a flat background colour and also generates
+    // the environment map, so `scene.environment` is the sky the camera sees
+    // rather than a canvas gradient standing in for it.
+    this.sky = new SkySystem();
+    this.sky.setRenderer(this.renderer);
+    for (const o of this.sky.objects) this.scene.add(o);
 
     this.worldGroup = new THREE.Group();
     this.scene.add(this.worldGroup);
@@ -73,6 +83,11 @@ export class Viewport {
     this.scene.background = new THREE.Color(0x161b22);
     this.scene.fog = null;
     this.renderer.setClearColor(0x161b22, 1);
+    // A part preview is a studio shot. A sky dome behind a product turntable is
+    // just a distracting gradient, and the studio already supplies its own
+    // gradient IBL below.
+    this.sky.sky.visible = false;
+    this.sky.stars.visible = false;
     this.key.intensity = 2.4;
     this.key.color.set(0xffffff);
     this.key.position.set(2, 4, 3);
@@ -138,6 +153,11 @@ export class Viewport {
     const indoor = this.track && this.track.interior;
     const v = sunVector(w);
 
+    // The dome is driven first: it owns the sky colours and the IBL, and the
+    // hemisphere/fill lights below are then balanced against what it produced.
+    this.sky.apply({ ...w, id: this.weatherId }, v, { indoor });
+    if (!indoor) this.sky.update(this.camera, true);
+
     if (indoor) {
       this.key.position.set(12, 100, 18);
       this.key.intensity = 2.5;
@@ -153,15 +173,23 @@ export class Viewport {
       this.key.position.set(v.x * 100, v.y * 100, v.z * 100);
       this.key.intensity = w.sunI;
       this.key.color.set(w.sunColor);
-      // Fill comes from the opposite side of the sky and a little above the
-      // horizon, so it lifts the shaded faces without flattening the key.
+      // The hemisphere and ambient terms are now largely REDUNDANT outdoors.
+      //
+      // `scene.environment` is the sky dome rendered into a PMREM, which means
+      // it already supplies sky-colour irradiance from above and ground-bounce
+      // from below - exactly what a HemisphereLight models. Leaving the old
+      // values at full strength on top of it double-counts the whole sky, and
+      // it shows: every upward-facing surface reads washed out and the dark
+      // carbon of the airframe lifts to pale blue. They are cut to about a
+      // third, which leaves a floor so nothing is ever pure black (still the
+      // documented reason they exist) without fighting the IBL.
       this.fill.position.set(-v.x * 60, 30, -v.z * 60);
       this.fill.intensity = 0.25 + w.hemiI * 0.3;
       this.fill.color.set(w.skyHorizon);
-      this.hemi.intensity = w.hemiI;
+      this.hemi.intensity = w.hemiI * 0.32;
       this.hemi.color.set(w.skyTop);
       this.hemi.groundColor.set(w.groundBounce);
-      this.ambient.intensity = w.ambient;
+      this.ambient.intensity = w.ambient * 0.30;
     }
 
     if (this.scene.fog) {
@@ -170,7 +198,10 @@ export class Viewport {
         ? (this.track.fog ? 1 / (this.track.fog.far || 300) : 0.003)
         : w.fogDensity;
     }
-    this.scene.background = new THREE.Color(indoor ? 0x14171c : w.skyHorizon);
+    // Outdoors the dome is the background, so scene.background must stay null:
+    // a background colour would paint over it. Indoors there is no dome, so the
+    // clear colour is what you actually see past the doors.
+    this.scene.background = indoor ? new THREE.Color(0x14171c) : null;
     this.renderer.toneMappingExposure = w.exposure;
     this.renderer.setClearColor(indoor ? 0x14171c : w.skyHorizon, 1);
     this._updateEnvMap(w, indoor);
@@ -179,15 +210,25 @@ export class Viewport {
   }
 
   /**
-   * Builds an environment map from the current sky.
+   * Builds the environment map.
    *
    * This is not a nicety. A PBR material with metalness has almost no diffuse
    * response - all of its look comes from reflected surroundings - so with
    * `scene.environment` unset every metal surface renders near-black. The
-   * hangar walls and the rooftop plant were exactly that. A cheap vertical
-   * gradient is enough to reflect convincingly and costs one small texture.
+   * hangar walls and the rooftop plant were exactly that.
+   *
+   * Outdoors the dome renders its own PMREM (`SkySystem.bakeEnvironment`), so
+   * the reflections agree with the sky on screen and a low sun actually shows
+   * up in a polished surface. Indoors there is no visible sky, so the IBL is
+   * the old vertical gradient: a dark ceiling, a bright band at the far wall
+   * and a dark floor, which is a reasonable stand-in for a lit hangar shell.
    */
   _updateEnvMap(w, indoor) {
+    if (!indoor) {
+      const tex = this.sky.envTexture || this.sky.bakeEnvironment();
+      this.scene.environment = tex || null;
+      return;
+    }
     if (!this._pmrem) this._pmrem = new THREE.PMREMGenerator(this.renderer);
     const hex = (c) => `#${c.toString(16).padStart(6, '0')}`;
     const cv = document.createElement('canvas');
@@ -195,17 +236,9 @@ export class Viewport {
     cv.height = 32;
     const ctx = cv.getContext('2d');
     const g = ctx.createLinearGradient(0, 0, 0, 32);
-    if (indoor) {
-      // Under a roof: dark ceiling, a bright band at the far wall, dark floor.
-      g.addColorStop(0, '#20242c');
-      g.addColorStop(0.45, '#6d7480');
-      g.addColorStop(1, '#2a2d31');
-    } else {
-      g.addColorStop(0, hex(w.skyTop));
-      g.addColorStop(0.48, hex(w.skyHorizon));
-      g.addColorStop(0.52, hex(w.fogColor));
-      g.addColorStop(1, hex(w.groundBounce));
-    }
+    g.addColorStop(0, '#20242c');
+    g.addColorStop(0.45, '#6d7480');
+    g.addColorStop(1, '#2a2d31');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, 64, 32);
 
@@ -346,22 +379,12 @@ export class Viewport {
     this.clearTrack();
     this.setEnvironment(track);
 
-    const edgeMat = new THREE.LineBasicMaterial({ color: 0x9fb6cc, transparent: true, opacity: 0.28 });
-
-    for (const o of track.obstacles) {
-      const geo = new THREE.BoxGeometry(o.sx, o.sy, o.sz);
-      // Per-surface texel density: a 170 m hangar wall and a 0.4 m crate must
-      // show the same grain, which default 0..1 face UVs cannot do.
-      scaleBoxUV(geo, o.sx, o.sy, o.sz, 0.35);
-      const mesh = new THREE.Mesh(geo, surfaceMaterial(o.material));
-      mesh.position.set(o.x, o.y, o.z);
-      this.trackGroup.add(mesh);
-      // Keep the blueprint edge lines, but faint - with real surfaces on top
-      // they are a technical accent, not the primary read.
-      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), edgeMat);
-      edges.position.copy(mesh.position);
-      this.trackGroup.add(edges);
-    }
+    // Scenery turns each obstacle into real geometry - conifers, houses, city
+    // blocks, rock - fitted inside its collision box. `track.obstacles` itself
+    // is untouched: it is still the RF and collider truth.
+    if (!this.scenery) this.scenery = new Scenery();
+    this.trackGroup.add(this.scenery.build(track));
+    this.sceneryStats = this.scenery.stats;
 
     // Race line
     if (track.line) {
@@ -481,6 +504,10 @@ export class Viewport {
 
   render() {
     this._fadeNearGates(this.camera);
+    // The dome is a fixed-size box that rides with the camera. Without this it
+    // slides visibly once the craft is a few hundred metres downrange, because
+    // the racing lines on the long tracks run out to 300+ m.
+    this.sky.update(this.camera, false);
     this.renderer.render(this.scene, this.camera);
   }
 }

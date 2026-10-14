@@ -37,7 +37,10 @@ class App {
     this.windDir = 90;
     this.gust = 1.5;
     this.rxPolAngle = 0;
-    this.trackId = 't-hangar';
+    // Default to an outdoor track. The hangar is the one interior environment
+    // and it is still there for the indoor RF lesson, but opening the app into
+    // it meant the first thing anyone saw was the one place with no sky.
+    this.trackId = 't-rooftops';
 
     this.load();
 
@@ -507,6 +510,13 @@ class App {
         fog: vp.scene.fog ? +vp.scene.fog.density.toFixed(5) : 0,
         rain: vp.rain ? (vp.rain.visible ? +vp.rain.userData.amount.toFixed(2) : 0) : 0,
         envMap: !!vp.scene.environment,
+      },
+      render: {
+        calls: vp.renderer.info.render.calls,
+        tris: vp.renderer.info.render.triangles,
+        geometries: vp.renderer.info.memory.geometries,
+        textures: vp.renderer.info.memory.textures,
+        scenery: vp.sceneryStats || null,
       },
     };
     document.documentElement.dataset.fpvDebug = JSON.stringify(d);

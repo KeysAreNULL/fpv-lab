@@ -1,0 +1,102 @@
+﻿{
+  "_notes": [
+    "Poly Haven publishes NO .glb files for these assets. Its 'gltf' category is an uncompressed multi-file bundle: <id>_1k.gltf + <id>.bin + textures/*.jpg. Each downloaded asset is therefore a directory bundle, loadable directly by the vendored three.js GLTFLoader via 'assets/models/<id>/<id>_1k.gltf'.",
+    "No Draco or KTX2 extensions are used, so nothing is required beyond vendor/GLTFLoader.js to load them.",
+    "All four downloaded assets use the 1k LOD (the lowest offered) and every file was MD5-verified against the Poly Haven API.",
+    "The three tree assets were skipped because even their smallest download is 96-914 MB. They are photogrammetry scans with extremely dense meshes; fixing them requires mesh decimation (gltfpack/meshoptimizer or a Blender decimate pass), not a smaller download."
+  ],
+  "assets": {
+    "shrub_02": {
+      "file": "shrub_02/shrub_02_1k.gltf",
+      "bytes": 1966425,
+      "license": "CC0",
+      "source": "https://polyhaven.com/a/shrub_02",
+      "polyhavenAssetId": "shrub_02",
+      "format": "gltf",
+      "resolution": "1k",
+      "md5Verified": true,
+      "files": [
+        { "file": "shrub_02/shrub_02_1k.gltf", "bytes": 8083 },
+        { "file": "shrub_02/shrub_02.bin", "bytes": 758692 },
+        { "file": "shrub_02/textures/shrub_02_diff_1k.jpg", "bytes": 395120 },
+        { "file": "shrub_02/textures/shrub_02_nor_gl_1k.jpg", "bytes": 490815 },
+        { "file": "shrub_02/textures/shrub_02_arm_1k.jpg", "bytes": 313715 }
+      ]
+    },
+    "rock_07": {
+      "file": "rock_07/rock_07_1k.gltf",
+      "bytes": 2184088,
+      "license": "CC0",
+      "source": "https://polyhaven.com/a/rock_07",
+      "polyhavenAssetId": "rock_07",
+      "format": "gltf",
+      "resolution": "1k",
+      "md5Verified": true,
+      "files": [
+        { "file": "rock_07/rock_07_1k.gltf", "bytes": 2979 },
+        { "file": "rock_07/rock_07.bin", "bytes": 468936 },
+        { "file": "rock_07/textures/rock_07_diff_1k.jpg", "bytes": 635452 },
+        { "file": "rock_07/textures/rock_07_nor_gl_1k.jpg", "bytes": 766986 },
+        { "file": "rock_07/textures/rock_07_arm_1k.jpg", "bytes": 309735 }
+      ]
+    },
+    "rock_09": {
+      "file": "rock_09/rock_09_1k.gltf",
+      "bytes": 1964421,
+      "license": "CC0",
+      "source": "https://polyhaven.com/a/rock_09",
+      "polyhavenAssetId": "rock_09",
+      "format": "gltf",
+      "resolution": "1k",
+      "md5Verified": true,
+      "files": [
+        { "file": "rock_09/rock_09_1k.gltf", "bytes": 2745 },
+        { "file": "rock_09/rock_09.bin", "bytes": 286592 },
+        { "file": "rock_09/textures/rock_09_diff_1k.jpg", "bytes": 595103 },
+        { "file": "rock_09/textures/rock_09_nor_gl_1k.jpg", "bytes": 757031 },
+        { "file": "rock_09/textures/rock_09_arm_1k.jpg", "bytes": 322950 }
+      ]
+    },
+    "dead_tree_trunk": {
+      "file": "dead_tree_trunk/dead_tree_trunk_1k.gltf",
+      "bytes": 4787539,
+      "license": "CC0",
+      "source": "https://polyhaven.com/a/dead_tree_trunk",
+      "polyhavenAssetId": "dead_tree_trunk",
+      "format": "gltf",
+      "resolution": "1k",
+      "md5Verified": true,
+      "files": [
+        { "file": "dead_tree_trunk/dead_tree_trunk_1k.gltf", "bytes": 2812 },
+        { "file": "dead_tree_trunk/dead_tree_trunk.bin", "bytes": 2293788 },
+        { "file": "dead_tree_trunk/textures/dead_tree_trunk_diff_1k.jpg", "bytes": 713480 },
+        { "file": "dead_tree_trunk/textures/dead_tree_trunk_nor_gl_1k.jpg", "bytes": 1053075 },
+        { "file": "dead_tree_trunk/textures/dead_tree_trunk_arm_1k.jpg", "bytes": 724384 }
+      ]
+    },
+    "fir_tree_01": {
+      "skipped": true,
+      "reason": "No .glb exists for this asset, and the glTF export is an uncompressed multi-file bundle (.gltf + .bin + 11 textures). The geometry alone (fir_tree_01.bin) is 456 MB, making the smallest possible download ~465 MB at the 1k LOD - far above the 6 MB cap.",
+      "smallestAvailableMB": 465,
+      "license": "CC0",
+      "source": "https://polyhaven.com/a/fir_tree_01",
+      "polyhavenAssetId": "fir_tree_01"
+    },
+    "pine_tree_01": {
+      "skipped": true,
+      "reason": "No .glb exists for this asset, and the glTF export is an uncompressed multi-file bundle (.gltf + .bin + 11 textures). The geometry alone (pine_tree_01.bin) is 905 MB, making the smallest possible download ~914 MB at the 1k LOD - far above the 6 MB cap.",
+      "smallestAvailableMB": 914,
+      "license": "CC0",
+      "source": "https://polyhaven.com/a/pine_tree_01",
+      "polyhavenAssetId": "pine_tree_01"
+    },
+    "tree_small_02": {
+      "skipped": true,
+      "reason": "No .glb exists for this asset, and the glTF export is an uncompressed multi-file bundle (.gltf + .bin + 9 textures). The geometry alone (tree_small_02.bin) is 91 MB, making the smallest possible download ~96 MB at the 1k LOD - far above the 6 MB cap.",
+      "smallestAvailableMB": 96,
+      "license": "CC0",
+      "source": "https://polyhaven.com/a/tree_small_02",
+      "polyhavenAssetId": "tree_small_02"
+    }
+  }
+}

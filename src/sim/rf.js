@@ -355,6 +355,35 @@ export class RadioLink {
     this.txDbm = sys.txDbm;
     this.sensDbm = sys.sensDbm;
     this.periodMs = 1000 / this.rateHz;
+    // Seed the reported state so the link is readable *before* it has ever
+    // ticked.
+    //
+    // `Simulation.step` only calls `update()` once per link period (4 ms at
+    // 250 Hz), and `hud()` reads `radio.rssi` on every rendered frame. On the
+    // first frame of the first step those two disagree - the accumulator has
+    // not reached the period yet - so rssi/lq/latency are still undefined and
+    // the control-link panel threw on `undefined.toFixed`. That took down the
+    // whole sim render loop on the very first frame after switching to the
+    // simulator tab, which is why it presented as "the app is broken".
+    //
+    // Starting at a perfect link is the right seed: it is what a real receiver
+    // reports before it has heard anything, and within a few milliseconds the
+    // real budget replaces it.
+    //
+    // `configure` is also called when the pilot switches protocol mid-flight,
+    // which is not a reboot: the counters below are lifetime totals, so they
+    // are only seeded once and a reconfigure leaves them alone.
+    const seed = this.droppedFrames === undefined;
+    this.rssi = this.txDbm;
+    this.lq = 1;
+    this.margin = 999;
+    this.snr = 999;
+    this.latencyMs = this.latencyBaseMs;
+    this.delivered = true;
+    this.silentMs = 0;
+    this.failsafe = false;
+    this.degraded = false;
+    if (seed) this.droppedFrames = 0;
   }
   label() { return `${this.sys.label} ${this.freqMHz} MHz @ ${this.rateHz} Hz`; }
 

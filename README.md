@@ -118,8 +118,8 @@ Three rendering rules worth knowing before changing this:
 ## The drone model
 
 `src/render/droneMesh.js` builds geometry from the same numbers the physics
-uses, which means a unit slip shows up as an absurd object. Four have been, and
-all four were found by measuring the model in Node rather than by looking at it:
+uses, which means a unit slip shows up as an absurd object. Each of these was
+found by measuring the model in Node rather than by looking at it:
 
 | symbol | unit | what it is *not* |
 | --- | --- | --- |
@@ -127,6 +127,55 @@ all four were found by measuring the model in Node rather than by looking at it:
 | `pitch__mm` | mm of *pitch* (109 on a 5x4.3) | not blade thickness, and not an angle: extruding by it gave 10 cm paddles, and `pitch / radius` gave a 54° blade that stood on edge |
 | `D__mm` | mm | the prop disc lies in the body **XY** plane, because the spin axis is Z (NED) — rotating the blade geometry on to an edge stops it spinning about Z at all |
 | arm direction | `+atan2(y, x)` | the mirrored sign puts both arms on the same side and the frame draws as two crossed sticks |
+| arm profile origin | centred on the arm's **midpoint** | the mesh sits at the *half* hub, so a profile drawn `0 → armLength` puts every motor mount 40 mm outboard of its own motor |
+
+It is assembled from real parts rather than boxes: a tapered unibody bottom
+plate sized from `plateArea__cm2`, a raised canopy, three tiers of standoffs
+carrying the ESC, FC and RX (30.5 or 20×20 mounting, read off `stackOffset.y`),
+four extruded arms ramped up to the motor mount plane with pads and bolts at the
+frame's `motorPattern__mm`, motor bells with base, stator can, vent slots and
+shaft (the heights sum to `height__mm` exactly, so the prop lands on the shaft
+and not inside the bell), an angled camera pod with base plate, brackets, barrel
+and glass, a finned VTX with its coax pigtail, the duck antenna on (-0.55, 0,
+-0.83), a strapped pack with an XT60 and a balance lead, a capacitor, a camera
+cage, GPS masts on the long-range frames and duct rings when the frame spec sets
+`ducts`. Ducts are sized to land on the prop tip circle rather than outside it:
+real guards do overhang, but overhang means visible plastic through walls.
+
+`measureExtents(craft)` walks every vertex and returns the world X/Y/Z extents
+under `Q_LEVEL` and under identity, plus the furthest vertex from the body
+origin. Measured, not eyeballed — and measured from *vertices*, because the AABB
+of a rotated prop blade reports corners at r·√2 and reads as a false "the model
+is bigger than the collider":
+
+| build | Q_LEVEL X | Q_LEVEL Y | Q_LEVEL Z | collider | swept radius |
+| --- | --- | --- | --- | --- | --- |
+| `f-5-race` 5×4.3 | 0.266 | 0.123 | 0.256 | 0.174 | 0.179 |
+| `f-7-lr` 7×4 | 0.412 | 0.163 | 0.396 | 0.269 | 0.272 |
+| `f-x-10` 10×4.5 | 0.602 | 0.225 | 0.576 | 0.392 | 0.393 |
+
+Q_LEVEL leaves X ≈ Z with Y small (flat); identity leaves X ≈ Y with Z small,
+which is the same pancake-on-edge failure as the table above. The bottom plate
+on the stock 5" is 121 mm across the back against a 220 mm wheelbase, which is
+the other number worth checking — it is supposed to be smaller than the arms are
+long.
+
+Two things the mesh cannot fix, both in `craft.js`:
+
+- **The collision sphere is a planar radius used in 3D.** It is
+  `hypot(hub.x, hub.y) + D/2000`, but the props sit `stackOffset.y +
+  motorHeight + 4 mm` *above* the body origin and a pitched blade sweeps its tip
+  another `r·sin(pitch)` up. Every frame's worst swept corner therefore sits
+  0.4–7.6 % outside the sphere. The planar radius is exactly right — the prop
+  tips reach `propTipRadius` and no further — but a conservative sphere wants
+  the height folded in.
+- **The battery's inertia box is below the bottom plate.** The pack is modelled
+  on the canopy, pushed forward against the camera with the antenna sweeping
+  back over it, which is where a real one lives.
+
+Geometry and materials are cached **per instance**. They cannot be module-level:
+three.js owns geometry lifetime, so a cache one `DroneModel` disposes pulls the
+buffers out from under the other two (builder preview, sim, race).
 
 The model is rebuilt only when the spec string changes: `build()` stores
 `JSON.stringify(spec)` because `update()` compares against a string, and
