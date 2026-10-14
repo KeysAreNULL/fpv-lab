@@ -18,7 +18,9 @@ export class RaceView {
     this.careerEl = root.querySelector('#career');
     this.scope = new Scope(root.querySelector('#racescope'));
     this.cams = root.querySelector('#cams-race');
-    this.trackId = 't-hangar';
+    // Matches App.trackId. They have to agree or the race panel describes a
+    // track that is not the one loaded in the world.
+    this.trackId = 't-rooftops';
     this.race = null;
     this.rivals = [];
     this.hudEl = root.querySelector('#hud-race');

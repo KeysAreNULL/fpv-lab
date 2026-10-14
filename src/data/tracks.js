@@ -115,21 +115,23 @@ export const TRACKS = [
       { x: 24, y: 2.0, z: -4 }, { x: 8, y: 4.6, z: -32 }, { x: -22, y: 5.6, z: -20 },
       { x: -34, y: 2.4, z: 12 },
     ],
+    // `kind` is a RENDERING hint only. It says which model to build; the
+    // numbers below are the collision and RF truth and must not change.
     obstacles: [
-      box(0, 14.2, 0, 170, 0.4, 150, 'metal'),                      // roof slab (underside 14.0)
-      box(-84, 7.0, 0, 1.6, 14.0, 150, 'metal'),                    // west wall
-      box(84, 7.0, 0, 1.6, 14.0, 150, 'metal'),                     // east wall
-      box(0, 7.0, -74, 170, 14.0, 1.6, 'metal'),                    // north wall
-      box(0, 7.0, 74, 170, 14.0, 1.6, 'metal'),                     // south wall
+      box(0, 14.2, 0, 170, 0.4, 150, 'metal', { kind: 'roofSlab' }),  // roof slab (underside 14.0)
+      box(-84, 7.0, 0, 1.6, 14.0, 150, 'metal', { kind: 'wall' }),   // west wall
+      box(84, 7.0, 0, 1.6, 14.0, 150, 'metal', { kind: 'wall' }),    // east wall
+      box(0, 7.0, -74, 170, 14.0, 1.6, 'metal', { kind: 'wall' }),   // north wall
+      box(0, 7.0, 74, 170, 14.0, 1.6, 'metal', { kind: 'wall' }),    // south wall
       // internal partitions: drywall with a doorway gap
-      box(-30, 2.6, 6, 1.2, 5.2, 44, 'drywall'),
-      box(18, 2.6, 10, 1.2, 5.2, 40, 'drywall'),
-      box(36, 1.6, -30, 30, 3.2, 1.2, 'plywood'),
+      box(-30, 2.6, 6, 1.2, 5.2, 44, 'drywall', { kind: 'partition' }),
+      box(18, 2.6, 10, 1.2, 5.2, 40, 'drywall', { kind: 'partition' }),
+      box(36, 1.6, -30, 30, 3.2, 1.2, 'plywood', { kind: 'partition' }),
       // crane rail and a stack of crates
-      box(0, 7.6, -20, 168, 0.8, 0.8, 'metal'),
-      box(-56, 1.0, -44, 6, 2.0, 6, 'plywood'),
-      box(-49, 1.2, -46, 5, 2.4, 5, 'plywood'),
-      box(-58, 0.9, -38, 4, 1.8, 4, 'plywood'),
+      box(0, 7.6, -20, 168, 0.8, 0.8, 'metal', { kind: 'rail' }),
+      box(-56, 1.0, -44, 6, 2.0, 6, 'plywood', { kind: 'crate' }),
+      box(-49, 1.2, -46, 5, 2.4, 5, 'plywood', { kind: 'crate' }),
+      box(-58, 0.9, -38, 4, 1.8, 4, 'plywood', { kind: 'crate' }),
     ],
     gates: { spacing: 15, radius: 1.6 },
   },
@@ -166,14 +168,14 @@ export const TRACKS = [
       ];
       for (const [x, z, w, d, h] of blocks) {
         const mats = ['brick', 'concrete', 'reinforced'];
-        o.push(box(x, h / 2, z, w, h, d, mats[(x + z) % 3 | 0]));
-        o.push(box(x, h + 0.3, z, w + 0.6, 0.6, d + 0.6, 'concrete'));   // parapet
+        o.push(box(x, h / 2, z, w, h, d, mats[(x + z) % 3 | 0], { kind: 'building' }));
+        o.push(box(x, h + 0.3, z, w + 0.6, 0.6, d + 0.6, 'concrete', { kind: 'parapet' }));
       }
       // A water tower and a rooftop AC plant for landmark interest
-      o.push(box(52, 54, -14, 5, 8, 5, 'metal'));
-      o.push(box(26, 54.5, -52, 7, 3, 6, 'metal'));
+      o.push(box(52, 54, -14, 5, 8, 5, 'metal', { kind: 'waterTower' }));
+      o.push(box(26, 54.5, -52, 7, 3, 6, 'metal', { kind: 'acPlant' }));
       // Antenna mast: thin, metal, a real RF shadow caster
-      o.push(box(-48, 30, -22, 0.6, 60, 0.6, 'metal'));
+      o.push(box(-48, 30, -22, 0.6, 60, 0.6, 'metal', { kind: 'mast' }));
       return o;
     })(),
     gates: { spacing: 17, radius: 1.7 },
@@ -209,23 +211,23 @@ export const TRACKS = [
         [-66, 12, 12, 12], [58, -24, 12, 12],
       ];
       for (const [x, z, w, d] of houses) {
-        o.push(box(x, 1.6, z, w, 3.2, d, 'woodStud'));            // timber frame
-        o.push(box(x, 3.45, z, w + 1.0, 0.5, d + 1.0, 'plywood')); // roof
-        o.push(box(x + w / 2 - 0.3, 1.9, z, 0.3, 1.2, d * 0.5, 'glass')); // window
+        o.push(box(x, 1.6, z, w, 3.2, d, 'woodStud', { kind: 'house' }));       // timber frame
+        o.push(box(x, 3.45, z, w + 1.0, 0.5, d + 1.0, 'plywood'));             // roof
+        o.push(box(x + w / 2 - 0.3, 1.9, z, 0.3, 1.2, d * 0.5, 'glass', { kind: 'window' }));
       }
       // Trees: foliage attenuates badly and is solid to the drone
       for (let i = 0; i < 26; i++) {
         const a = i * 2.399, r = 26 + (i % 7) * 12;
         const x = Math.cos(a) * r, z = Math.sin(a) * r * 0.8;
         if (Math.abs(x) > 120 || Math.abs(z) > 120) continue;
-        o.push(box(x, 4, z, 5, 8, 5, 'foliage'));
-        o.push(box(x, 1.6, z, 0.6, 3.2, 0.6, 'wood'));
+        o.push(box(x, 4, z, 5, 8, 5, 'foliage', { kind: 'treeCrown' }));
+        o.push(box(x, 1.6, z, 0.6, 3.2, 0.6, 'wood', { kind: 'treeTrunk' }));
       }
       // A couple of solid brick landmarks
       o.push(box(-20, 3.0, 4, 6, 6, 6, 'brick'));
       o.push(box(50, 2.4, 34, 10, 4.8, 8, 'brick'));
       // Chain-link fence: solid to the drone, mostly transparent to RF
-      o.push(box(0, 1.4, -40, 150, 2.8, 0.2, 'mesh'));
+      o.push(box(0, 1.4, -40, 150, 2.8, 0.2, 'mesh', { kind: 'fence' }));
       return o;
     })(),
     gates: { spacing: 15, radius: 1.5 },
@@ -260,13 +262,13 @@ export const TRACKS = [
         const x = (rnd() - 0.5) * 300, z = (rnd() - 0.5) * 300;
         // leave the race corridor roughly clear
         const h = 12 + rnd() * 14;
-        o.push(box(x, h / 2, z, 1.1, h, 1.1, 'wood'));
-        o.push(box(x, h + 2.4, z, 9 + rnd() * 5, 6.5, 9 + rnd() * 5, 'foliage'));
+        o.push(box(x, h / 2, z, 1.1, h, 1.1, 'wood', { kind: 'pineTrunk' }));
+        o.push(box(x, h + 2.4, z, 9 + rnd() * 5, 6.5, 9 + rnd() * 5, 'foliage', { kind: 'pineCrown' }));
       }
       // A wooden cabin and a watchtower
-      o.push(box(-30, 1.8, 4, 8, 3.6, 7, 'woodStud'));
-      o.push(box(58, 5, 20, 4, 10, 4, 'wood'));
-      o.push(box(58, 10.4, 20, 5, 0.6, 5, 'plywood'));
+      o.push(box(-30, 1.8, 4, 8, 3.6, 7, 'woodStud', { kind: 'cabin' }));
+      o.push(box(58, 5, 20, 4, 10, 4, 'wood', { kind: 'watchtower' }));
+      o.push(box(58, 10.4, 20, 5, 0.6, 5, 'plywood', { kind: 'watchtowerDeck' }));
       return o;
     })(),
     gates: { spacing: 16, radius: 1.6 },
@@ -297,16 +299,17 @@ export const TRACKS = [
     obstacles: (() => {
       const o = [];
       // a rock tower: the landmark, and a real shadow caster
-      o.push(box(20, 40, -50, 26, 80, 26, 'concrete'));
-      o.push(box(20, 84, -50, 16, 8, 16, 'concrete'));
-      o.push(box(20, 96, -50, 2, 16, 2, 'metal'));
+      o.push(box(20, 40, -50, 26, 80, 26, 'concrete', { kind: 'mesa' }));
+      o.push(box(20, 84, -50, 16, 8, 16, 'concrete', { kind: 'watchtower' }));
+      o.push(box(20, 96, -50, 2, 16, 2, 'metal', { kind: 'mast' }));
       // scattered boulders
       for (let i = 0; i < 40; i++) {
         const a = i * 2.399, r = 60 + (i % 9) * 34;
-        o.push(box(Math.cos(a) * r, 2, Math.sin(a) * r, 5 + (i % 5) * 3, 4, 5 + (i % 4) * 3, 'concrete'));
+        o.push(box(Math.cos(a) * r, 2, Math.sin(a) * r, 5 + (i % 5) * 3, 4, 5 + (i % 4) * 3, 'concrete',
+          { kind: 'rock' }));
       }
       // an old farm shed
-      o.push(box(-140, 2, 24, 14, 4, 10, 'brick'));
+      o.push(box(-140, 2, 24, 14, 4, 10, 'brick', { kind: 'shed' }));
       return o;
     })(),
     gates: { spacing: 46, radius: 4.0 },
