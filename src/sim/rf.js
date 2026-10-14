@@ -75,7 +75,7 @@ export class RFWorld {
     const D = Math.hypot(dx, dy, dz);
     if (D < 1e-6) return wantDetail ? { loss: 0, segments: [], shadow: false, distance: D } : 0;
     const ux = dx / D, uy = dy / D, uz = dz / D;
-    const lambda = 299.792458 / freqMHz;
+    const lambda = 299792458 / (freqMHz * 1e6); // c/f, f in MHz -> metres
 
     let loss = 0;
     let worstDiff = 0;
@@ -414,7 +414,10 @@ export class RadioLink {
       ? clamp(1 - Math.pow(this.lq, 3.5), 0, 1)
       : clamp(1 - Math.pow(this.lq, 9), 0, 1);
     this.delivered = Math.random() > missP * 0.6;
-    this.droppedFrames++;
+    // Only a frame that actually failed to arrive is a dropped frame. Counting
+    // unconditionally turned this into a total frame counter, so the HUD's
+    // "frames" read was really "frames sent".
+    if (!this.delivered) this.droppedFrames++;
 
     // Latency: base + queueing at the link rate + retries.
     this.latencyMs = this.latencyBaseMs + this.periodMs * (this.jumps - 1) / 2

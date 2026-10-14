@@ -220,7 +220,9 @@ export class Scope {
     ctx.fillStyle = 'rgba(140,160,180,0.75)';
     ctx.font = '9px ui-monospace, monospace';
     ctx.textAlign = 'right';
-    ctx.fillText(String(Math.round((opts.max || 1) * 1000)), l - 4, t + 8);
+    // `opts.max` is already the top of the scale in real units (2000 for motor
+    // output), so it is printed as-is. The *1000 here rendered "2000000".
+    ctx.fillText(String(Math.round(opts.max || 1)), l - 4, t + 8);
     ctx.fillText('0', l - 4, t + gh);
     ctx.textAlign = 'left';
   }

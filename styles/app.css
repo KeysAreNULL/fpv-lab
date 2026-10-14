@@ -178,6 +178,45 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .cfg-row > .lbl { color: var(--fg-dim); }
 .cfg-row .desc { grid-column: 1 / -1; font: 10px var(--mono); color: var(--fg-mute); margin: -2px 0 3px 108px; }
 
+/* ---------------------------------------------------------------- controls */
+/* Channel rows are click-to-bind: arm one, then move a stick or press a button. */
+#controls-devices { display: flex; flex-direction: column; gap: 4px; margin-bottom: 2px; }
+.ctl-device { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center;
+  padding: 4px 6px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 3px; }
+.ctl-device.active { border-color: var(--accent); }
+.ctl-device-name { font: 10px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctl-device-meta { font: 9px var(--mono); color: var(--fg-mute); }
+
+.ctl-config-row { padding: 3px; border: 1px solid transparent; border-radius: 3px; cursor: pointer; }
+.ctl-config-row.sel { border-color: var(--line); background: rgba(88, 183, 232, 0.05); }
+.ctl-row { display: flex; flex-direction: column; gap: 3px; }
+.ctl-head { display: grid; grid-template-columns: 52px 1fr auto auto; gap: 6px; align-items: center; }
+.ctl-inv-wrap { display: flex; align-items: center; gap: 3px; font: 9px var(--mono);
+  color: var(--fg-mute); cursor: pointer; user-select: none; }
+.ctl-inv-wrap input { accent-color: var(--accent); margin: 0; }
+.ctl-inv-wrap:hover { color: var(--fg); }
+.ctl-label { font: 11px var(--mono); color: var(--fg); }
+.ctl-name { font: 10px var(--mono); color: var(--fg-dim); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.ctl-bind { padding: 2px 7px; font: 10px var(--mono); }
+.ctl-bind.armed { border-color: var(--accent); color: var(--accent); }
+.ctl-bar { height: 4px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 2px;
+  overflow: hidden; }
+.ctl-bar-fill { height: 100%; width: 0%; background: var(--accent); transition: width 0.05s linear; }
+.ctl-val { font: 9px var(--mono); color: var(--fg-mute); text-align: right; }
+
+/* ------------------------------------------------------------- rates card */
+/* Betaflight-style rates: profile switch, per-axis knobs, live curve. */
+.rates-card .rate-axes { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 6px; }
+.rate-axis h4 { margin: 4px 0 2px; font: 10px var(--mono); color: var(--accent-2);
+  text-transform: uppercase; letter-spacing: 0.06em; }
+.rate-curve { width: 100%; height: auto; display: block; border: 1px solid var(--line);
+  border-radius: 3px; margin-top: 4px; }
+.rate-legend { display: flex; gap: 10px; margin-top: 3px; }
+.rate-legend .rl { font: 9px var(--mono); display: flex; align-items: center; gap: 4px; }
+.rate-legend .rl::before { content: ''; width: 10px; height: 2px; background: currentColor; }
+.rl-roll { color: #58b7e8; } .rl-pitch { color: #e0a04a; } .rl-yaw { color: #7fd6a8; }
+
 /* ------------------------------------------------------------------- stats */
 .stats { display: flex; flex-direction: column; gap: 1px; }
 .stat { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: baseline;

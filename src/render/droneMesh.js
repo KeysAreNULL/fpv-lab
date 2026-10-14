@@ -719,13 +719,26 @@ export class DroneModel {
     // blade is pitched, little enough that the disc still reads as a disc.
     const pitchAngle = clamp(Math.atan2(spec.pitch__mm / 1000, 0.75 * D) * 0.35, 0.06, 0.30);
     for (let b = 0; b < blades; b++) {
+      // Spin the outer arm about the hub, then pitch the inner blade about its
+      // OWN radial axis. These must be two nested transforms, not two Euler
+      // components on one object: three.js composes XYZ Euler as Rx*Ry*Rz, so
+      // `rotation.z = spin` together with `rotation.x = pitch` applies the pitch
+      // about a fixed world X *after* the spin. Every blade then gets a different
+      // pitch - measured -9.2, 0.0, +9.2, 0.0 deg on a 4-blade, an 18.4 deg
+      // spread - so the blades are not coplanar and each looks bent the wrong
+      // way. It is the most visible geometry bug in the model and it is invisible
+      // from any single angle.
+      const arm2 = new THREE.Group();
+      arm2.rotation.z = (b / blades) * Math.PI * 2;
       const blade = new THREE.Mesh(geo, mProp);
-      // Spin about the hub axis first, then pitch about the blade's own radial
-      // axis - which is X after the spin, so the pitch leans into the relative
-      // wind rather than rolling the blade.
-      blade.rotation.z = (b / blades) * Math.PI * 2;
-      blade.rotation.x = pitchAngle;
-      grp.add(blade);
+      // Sign: the props spin with rotation.z *decreasing* (see the spin update),
+      // so a blade's relative airflow runs along u x Z. A blade has to be
+      // pitched so its normal tilts INTO that flow, which means a POSITIVE pitch
+      // about its own radial axis. Positive rotation.x pitches the wrong way,
+      // producing a reverse-pitch prop that would push the craft down.
+      blade.rotation.x = -pitchAngle;
+      arm2.add(blade);
+      grp.add(arm2);
     }
     const hubR = spec.hub__mm / 2000;
     const hub = this._cylZ(12, hubR * 0.62, 0.004,

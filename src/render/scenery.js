@@ -406,7 +406,11 @@ function primitivesToGeometry(json, buffers) {
 async function fetchBinary(url) {
   for (let attempt = 0; attempt < 2; attempt++) {
     const src = attempt === 0 ? url : `${url}${url.includes('?') ? '&' : '?'}r=${attempt}`;
-    const r = await fetch(src, { cache: 'no-store' });
+    // `cache: 'no-store'` here would defeat the server's caching on every single
+    // load: it forces the ~3.8 MB of .bin buffers to be re-fetched even though
+    // they never change. Default caching lets the server answer with a 304.
+    // The empty-body retry below is the real defence against a poisoned entry.
+    const r = await fetch(src);
     if (!r.ok) throw new Error(`fetch ${r.status} ${src}`);
     const buf = await r.arrayBuffer();
     if (buf.byteLength) return buf;
@@ -423,7 +427,7 @@ function loadTexture(url) {
 
 /** Fetch a glTF, build a template from it, and cache it on the Scenery. */
 async function loadTemplate(url, targetVerts) {
-  const res = await fetch(url, { cache: 'no-store' });
+  const res = await fetch(url);
   if (!res.ok) throw new Error(`gltf ${res.status} ${url}`);
   const json = await res.json();
   const base = url.slice(0, url.lastIndexOf('/') + 1);

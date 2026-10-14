@@ -198,9 +198,12 @@ export class Prop {
   }
 }
 
-/** Convenience: figure of merit / thrust-to-power in a clean hover, for the builder UI. */
-export function propHoverMetrics(prop, density = 1.225) {
-  const n = 0; // filled by caller
-  const p = prop.solve(0, 0.001, density, { aoa: 0, height: 99, speed: 0 });
-  return p;
+/**
+ * Solve one prop at a given rpm in clean air. The old body solved at 0 rpm and
+ * ignored the requested rpm entirely, so it returned zero thrust and no
+ * efficiency at all - a stub dressed up as a helper.
+ * @param {number} rps revolutions per second
+ */
+export function propHoverMetrics(prop, rps = 0, density = 1.225) {
+  return prop.solve(rps, 0, density, { aoa: 0, height: 99, speed: 0 });
 }

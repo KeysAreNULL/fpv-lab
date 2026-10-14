@@ -56,11 +56,80 @@ const QTMP = q4(), QTMP2 = q4();
 
 /** Roll/pitch/yaw of the craft relative to level, in radians. */
 export function attitudeOf(quat, out = {}) {
-  // R_att = R_LEVEL^T * R  ->  q_att = conj(Q_LEVEL) * q
-  qconj(Q_LEVEL, QTMP);
-  qmul(QTMP, quat, QTMP2);
-  return qToEuler(QTMP2, out);
+  return qToEuler(levelAttitudeQuat(quat, QTMP3), out);
 }
+
+/**
+ * The craft's attitude with the level rotation removed: conj(Q_LEVEL) * quat.
+ *
+ * This is the frame `attitudeOf` reports in, and the frame any "desired
+ * attitude" is expressed in. Passing the raw world quaternion to something that
+ * expects this one silently compares the craft against level-plus-tilt, which
+ * is why angle mode sat at 0 degrees and refused to pitch.
+ */
+export function levelAttitudeQuat(quat, out = {}) {
+  qconj(Q_LEVEL, QTMP);
+  qmul(QTMP, quat, out);
+  return out;
+}
+const QTMP3 = q4();
+
+/**
+ * Rate setpoint that rotates the craft from its current attitude toward a
+ * desired one, as a body-frame rotation vector scaled by `kp` (rad/s per rad).
+ *
+ * This exists because angle mode cannot use Euler angles. `qToEuler` is the
+ * standard ZYX extraction, and ZYX is gimbal-locked at pitch = +-90: crossing
+ * that attitude flips the reported pitch by 180 degrees in a single step
+ * (measured: a 289 deg jump during a slow roll). Differencing a quantity that
+ * jumps by half a turn per step is not an attitude error, it is noise - the
+ * angle-mode loop then saturated, slammed the craft over, hit the singularity
+ * again and oscillated through the full 360 degrees.
+ *
+ * Going through the rotation vector instead is singularity-free: the shortest
+ * rotation from here to there has a well-defined axis and angle everywhere,
+ * including upside down. This is the same approach Betaflight takes for its
+ * angle-mode setpoints.
+ *
+ * @param {object} quat   current attitude
+ * @param {object} d      desired {roll, pitch, yaw} in RADIANS
+ * @param {number} kp     rad/s of setpoint per rad of error
+ * @param {number} max    clamp on the resulting setpoint, rad/s
+ */
+export function attitudeErrorRate(quat, d, kp, max = 9.1) {
+  const cr = Math.cos(d.roll / 2), sr = Math.sin(d.roll / 2);
+  const cp = Math.cos(d.pitch / 2), sp = Math.sin(d.pitch / 2);
+  const cy = Math.cos(d.yaw / 2), sy = Math.sin(d.yaw / 2);
+  // Desired attitude q = qyaw * qpitch * qroll (ZYX intrinsic), in the standard
+  // aerospace expansion. Sanity check: roll=0, yaw=0 must give (0, sin(p/2), 0,
+  // cos(p/2)) - a rotation about Y, not about X.
+  const qd = {
+    x: sr * cp * cy - cr * sp * sy,
+    y: cr * sp * cy + sr * cp * sy,
+    z: cr * cp * sy - sr * sp * cy,
+    w: cr * cp * cy + sr * sp * sy,
+  };
+
+  // Error rotation in the body frame: q_err = q_desired * conj(q_current).
+  // Use the tested qmul/qconj rather than expanding the product by hand - a
+  // hand-expanded version of this got the signs wrong and reported a pitch
+  // request as a roll request, which made angle mode refuse to pitch at all.
+  qconj(quat, QC1);
+  qmul(qd, QC1, QC2);
+  const ax = QC2.x, ay = QC2.y, az = QC2.z, aw = QC2.w;
+
+  const s = Math.hypot(ax, ay, az);
+  if (s < 1e-9) return { x: 0, y: 0, z: 0 };
+  const angle = 2 * Math.atan2(s, aw);        // shortest path, in (-pi, pi]
+  const k = angle / s;
+  // Rotation vector (rad) -> rate setpoint (rad/s), then clamp the RATE. The
+  // clamp has to come after the kp scaling or it is in the wrong units.
+  let rx = ax * k * kp, ry = ay * k * kp, rz = az * k * kp;
+  const m = Math.hypot(rx, ry, rz);
+  if (m > max) { const k2 = max / m; rx *= k2; ry *= k2; rz *= k2; }
+  return { x: rx, y: ry, z: rz };
+}
+const QC1 = q4(), QC2 = q4();
 
 /**
  * Build a craft from a spec.
@@ -142,13 +211,40 @@ export function buildCraft(spec, opts = {}) {
   }
   // Battery, strapped on top of the bottom plate (z is positive downwards from
   // the frame, so the pack sits at +z relative to the plates).
+  //
+  // Its fore/aft position is SOLVED, not guessed. The stack and the camera sit
+  // forward because they have to, so everything before the pack biases the CG
+  // ahead of the motor axis. Left uncorrected the stock 5" had its CG 6.5 mm
+  // forward of the thrust line, and since thrust acts on the motor axis while
+  // the body rotates about the CG, that produced a real nose-up moment: the
+  // craft pitched back on its own with the sticks centred. A pack mounted
+  // aft of centre is how a real build trims that out, and computing it keeps
+  // every frame trimmed rather than just the one the numbers were read off.
   const battLen = 0.075, battW = 0.038, battH = Math.max(0.028, battSpec.cells * 0.0105);
+  const battMass = battSpec.mass__m / 1000;
+  let fwdMoment = 0;                        // sum of m*x over everything else
+  for (const p of parts) fwdMoment += p.mass * p.pos.x;
+  // Solve m_batt * x = -moment, so the CG lands ON the thrust axis. Pendulum
+  // stability does not need a fore/aft offset: it comes from the CG sitting
+  // below the thrust plane (CG z is around -2 mm while the motors are at -25 mm),
+  // and that restoring moment only exists once the craft is tilted. A fore/aft
+  // bias would just leave the craft trimmed nose-down with sticks centred.
+  const battX = battMass > 0 ? (-fwdMoment / battMass) : 0;
   addPart('battery', battSpec.mass__m,
-    { x: battSpec.cells >= 6 ? 0.010 : 0.004, y: 0, z: battH / 2 + 0.004 }, 'box',
+    { x: battX, y: 0, z: battH / 2 + 0.004 }, 'box',
     [battLen, battW, battH]);
 
   const { I, mass, com } = builder.aboutCOM();
   body.setMassProperties(mass, I);
+  // The body's rotation is about the centre of mass, so every body-frame point
+  // at which a force is applied has to be given relative to the CG and not to
+  // the geometric origin. The pack sits on the canopy ahead of the camera, so
+  // the two are not the same point: for the stock 5" the CG is 6.5 mm forward
+  // and 2.4 mm up. Without this the aero surfaces - which are positioned
+  // relative to the origin - each picked up a spurious moment of com x f, which
+  // scales with airspeed and showed up as the craft rocking nose-up and back by
+  // a few degrees once every couple of seconds in forward flight.
+  body.com = { x: com.x, y: com.y, z: com.z };
   body.pos.y = 0.08;
   body.quat = { x: Q_LEVEL.x, y: Q_LEVEL.y, z: Q_LEVEL.z, w: Q_LEVEL.w };
 
@@ -186,19 +282,28 @@ export function buildCraft(spec, opts = {}) {
     pos: { x: 0, y: 0, z: topZ }, normal: { ...DOWN },
     area: plateArea * 0.55, cd0: 0.05, clSlope: 1.1, type: 'plate', name: 'top plate',
   }));
-  // arms
+  // arms. `clSlope: 0` makes these drag-only, which is both the truer model and
+  // the thing that keeps the model stable. A carbon arm is a streamlined tube,
+  // not a plate facing the thrust axis. Giving it a real normal-force slope
+  // couples roll rate to normal force: omega x r puts a z-velocity across the
+  // arms (they sit at y = +-0.039), that produces thrust-axis force, and it
+  // produces *more* roll torque. The loop diverges to NaN in about a second.
+  // Roll damping comes from the drag term instead, which is where it belongs.
   for (let i = 0; i < 4; i++) {
     surfaces.push(new AeroSurface({
       pos: { x: hubs[i].x / 2, y: hubs[i].y / 2, z: hubZ * 0.55 },
       normal: { ...DOWN },
-      area: armLen * armW * 1.5, cd0: 0.02, clSlope: 0.9, type: 'arm', name: 'arm',
+      area: armLen * armW * 1.5, cd0: 0.02, clSlope: 0, type: 'arm', name: 'arm',
     }));
   }
-  // prop discs
+  // Prop discs, also drag-only. A disc's normal force *is* the thrust, and that
+  // is already computed properly by prop.solve(); counting it again here both
+  // double-counts and reintroduces the same roll feedback, twice as strongly,
+  // since the discs sit furthest out at y = +-0.078.
   for (let i = 0; i < 4; i++) {
     surfaces.push(new AeroSurface({
       pos: hubs[i], normal: { ...DOWN },
-      area: props[i].A, cd0: 0.10, clSlope: 1.5, type: 'disc', name: `disc${i}`,
+      area: props[i].A, cd0: 0.10, clSlope: 0, type: 'disc', name: `disc${i}`,
     }));
   }
   // stack / camera bump
@@ -224,6 +329,9 @@ export function buildCraft(spec, opts = {}) {
   };
   craft.mass = mass;
   craft.com = com;
+  // Scratch for the level-referenced attitude quaternion handed to the FC each
+  // PID tick. Preallocated so the hot loop does not allocate.
+  craft.attQuat = q4();
   craft.pidDivisorEffective = pidDivisor;
   craft.physicsHz = physicsHz;
   craft.currentA = 0;
@@ -279,7 +387,11 @@ export function stepCraft(craft, dt, env, sticks, opts = {}) {
     const s = fc.armed
       ? { x: clamp(sticks.x, -1, 1), y: clamp(sticks.y, -1, 1), z: clamp(sticks.z, -1, 1), throttle }
       : { x: 0, y: 0, z: 0, throttle: 0 };
-    const out = fc.runPID(dt * craft.pidDivisorEffective, s, euler, {});
+    // The attitude goes with the setpoint: angle mode needs the current
+    // orientation to compute an attitude error, and it cannot get it from the
+    // Euler angles because those are gimbal-locked.
+    const out = fc.runPID(dt * craft.pidDivisorEffective, s, euler,
+      { quat: levelAttitudeQuat(body.quat, craft.attQuat) });
     // Impact detection drives anti-gravity.
     const g = Math.hypot(fc.accel.x, fc.accel.y, fc.accel.z);
     const impact = clamp((g - 2.2) / 6, 0, 1);
@@ -600,8 +712,10 @@ export function analyseBuild(spec, opts = {}) {
     hoverTime,
     mixTime: mixTime.time,
     mixCurrent: mixTime.avgCurrent,
-    motorLoading: motors.map((m, i) => (full[i].power / motors[i].maxPowerW)),
-    propTipSpeed: props.map((p) => p.solve(full[0].rps, 0, rho, {}).tipSpeed),
+    motorLoading: full.map((f, i) => (f.power / motors[i].maxPowerW)),
+    // Each prop at its own motor's rpm. It used to read full[0] for all four, so
+    // the builder's tip-speed readout ignored the imbalance it exists to show.
+    propTipSpeed: props.map((p, i) => p.solve(full[i].rps, 0, rho, {}).tipSpeed),
     eff: props[0].solve(full[0].rps * 0.75, 0, rho, {}).eff,
     result: { full, hover },
   };
@@ -675,3 +789,5 @@ function analyseWarnings(spec, craft, m) {
   }
   return w;
 }
+
+

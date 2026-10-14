@@ -8,8 +8,8 @@ import { el, clear, sliderRow, selectRow, statRow, fmt } from './dom.js';
 import {
   CATEGORIES, DATA, TIERS, getPart, partPrice, buildCost, framePropClass, listParts,
 } from '../data/catalog.js';
-import { analyseBuild } from '../sim/craft.js';
-import { Prop } from '../sim/prop.js';
+import { analyseBuild, buildCraft, Q_LEVEL } from '../sim/craft.js';
+import { RigidBody, applyAero } from '../sim/body.js';
 
 export class BuilderView {
   constructor(root, app) {
@@ -225,15 +225,23 @@ export class BuilderView {
     return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
   }
 
-  /** Rough frontal-area drag estimate, useful when comparing frames. */
+  /**
+ * Drag in level forward flight at 25 m/s, from the real flat-plate model rather
+ * than a hand-rolled frontal-area estimate. The old formula used Cd 0.55 and
+ * counted all four prop discs as frontal area, but in level flight the discs lie
+ * flat and are edge-on to the airflow; it reported 18.7 N for a build that
+ * actually produces 2.8 N, so it disagreed with the simulator by 7x.
+ */
   dragAt25(spec) {
-    const prop = new Prop(getPart('prop', spec.prop));
-    prop.solve(200, 0, 1.225, {});
-    const f = getPart('frame', spec.frame);
-    const area = f.plateArea__cm2 / 1e4 * 2 + prop.A * 4;
-    const cd = 0.55;
-    const q = 0.5 * 1.225 * 25 * 25 * area * cd;
-    return `${q.toFixed(1)} N`;
+    const craft = buildCraft(spec);
+    const body = new RigidBody();
+    body.quat = { x: Q_LEVEL.x, y: Q_LEVEL.y, z: Q_LEVEL.z, w: Q_LEVEL.w };
+    body.updateRotation();
+    const g = 1.196; // the density the surrounding stats are reported at
+    // Level craft flies nose-first along world -Z, so the relative airflow is
+    // a 25 m/s stream coming at it head-on.
+    const { drag } = applyAero(body, craft.surfaces, { x: 0, y: 0, z: -25 }, g);
+    return `${drag.toFixed(1)} N`;
   }
 }
 

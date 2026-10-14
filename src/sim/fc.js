@@ -14,6 +14,8 @@
 import {
   clamp, DEG, RAD, sign, lag, smoothstep, approach,
 } from '../core/math.js';
+import { defaultRates, stickToRate as rateStickToRate, normaliseRates } from './rates.js';
+import { attitudeErrorRate } from './craft.js';
 
 /* --------------------------------------------------------------- filters */
 
@@ -84,8 +86,11 @@ export class BiquadNotch {
 
 export const DEFAULT_TUNE = {
   name: 'Stock 5"',
-  // rates (deg/s, BF "actual" convention)
-  rcRate: 280, expo: 40, centerSens: 50, maxRate: 850,
+  // Rate profile lives in `rates` (see sim/rates.js) and is edited on the Tune
+  // view's Rates card. The flat rcRate/expo/centerSens/maxRate fields that used
+  // to sit here are retained only so an existing saved tune can be migrated by
+  // normaliseRates(); nothing reads them at runtime.
+  rates: defaultRates(),
   // P / I / D / F per axis: roll, pitch, yaw
   p: [47, 50, 45], i: [44, 46, 45], d: [35, 38, 0], f: [60, 60, 60],
   // filters
@@ -106,23 +111,61 @@ export const DEFAULT_TUNE = {
 
 export function cloneTune(t = DEFAULT_TUNE) { return JSON.parse(JSON.stringify(t)); }
 
+/**
+ * Build a rates block from the shorthand the preset library reads better in:
+ * a single max rate / centre / expo for roll and pitch, with yaw following at a
+ * proportionally slower rate the way a real tune sets it up.
+ */
+function ratesProfile({ maxRate, centerSens, expo, yawMaxRate, yawExpo }) {
+  const r = defaultRates();
+  if (Number.isFinite(maxRate)) {
+    r.axes.roll.maxRate = maxRate;
+    r.axes.pitch.maxRate = maxRate;
+    r.axes.yaw.maxRate = yawMaxRate ?? Math.round(maxRate * 0.7);
+  }
+  if (Number.isFinite(centerSens)) {
+    r.axes.roll.centerSensitivity = centerSens;
+    r.axes.pitch.centerSensitivity = centerSens;
+    r.axes.yaw.centerSensitivity = Math.max(20, centerSens - 5);
+  }
+  if (Number.isFinite(expo)) {
+    for (const a of ['roll', 'pitch', 'yaw']) r.axes[a].expo = expo;
+    for (const a of ['roll', 'pitch', 'yaw']) r.axes[a].rcExpo = expo;
+  }
+  if (Number.isFinite(yawExpo)) r.axes.yaw.expo = yawExpo;
+  return r;
+}
+
 // Preset library. Values are the kind of tunes people actually publish.
+//
+// The `expo` numbers here are Betaflight *actual* expo, where 10^(e/100) shapes
+// the curve. The first version of this library carried the old hybrid curve's
+// expo (30-55) straight across, which in the actual profile means 10^0.3 to
+// 10^0.55 - an extremely flat centre. At expo 40 the roll axis gave 4 deg/s at
+// 10% stick, so every preset felt disconnected and sluggish. Real tunes sit
+// roughly in the 0-25 band, with race tunes closest to 0.
 export const TUNE_LIBRARY = [
   DEFAULT_TUNE,
-  { ...cloneTune(), name: 'Smooth / cinematic', rcRate: 200, expo: 30, p: [38, 42, 40],
-    i: [35, 38, 38], d: [28, 30, 0], f: [40, 42, 40], gyroLpf2: 200, dtermLpf: 60,
-    itermRelax: 12, maxRate: 620 },
-  { ...cloneTune(), name: 'Race / sharp', rcRate: 360, expo: 50, centerSens: 55,
+  { ...cloneTune(), name: 'Smooth / cinematic',
+    rates: ratesProfile({ maxRate: 620, centerSens: 70, expo: 18, yawExpo: 14 }),
+    p: [38, 42, 40], i: [35, 38, 38], d: [28, 30, 0], f: [40, 42, 40],
+    gyroLpf2: 200, dtermLpf: 60, itermRelax: 12 },
+  { ...cloneTune(), name: 'Race / sharp',
+    rates: ratesProfile({ maxRate: 1200, centerSens: 120, expo: 5, yawExpo: 8 }),
     p: [58, 62, 55], i: [55, 58, 52], d: [42, 45, 0], f: [95, 98, 95],
-    gyroLpf2: 420, dtermLpf: 110, maxRate: 1100, dMax: 800 },
-  { ...cloneTune(), name: 'Freestyle / soft', rcRate: 250, expo: 45, p: [42, 45, 42],
-    i: [40, 42, 40], d: [30, 32, 0], f: [50, 52, 50], dtermLpf: 70, iMax: 300 },
-  { ...cloneTune(), name: 'Freestyle / filthy', rcRate: 330, expo: 55, p: [52, 56, 50],
-    i: [50, 53, 48], d: [34, 36, 0], f: [65, 68, 65], gyroLpf2: 180, dtermLpf: 55,
-    itermRelax: 5, dynNotchDepth: 130 },
-  { ...cloneTune(), name: 'Long range / efficient', rcRate: 190, expo: 35, p: [35, 38, 36],
-    i: [42, 45, 42], d: [26, 28, 0], f: [38, 40, 38], gyroLpf2: 160, dtermLpf: 60,
-    dynNotchDepth: 80, maxRate: 520 },
+    gyroLpf2: 420, dtermLpf: 110, dMax: 800 },
+  { ...cloneTune(), name: 'Freestyle / soft',
+    rates: ratesProfile({ maxRate: 900, centerSens: 100, expo: 15, yawExpo: 12 }),
+    p: [42, 45, 42], i: [40, 42, 40], d: [30, 32, 0], f: [50, 52, 50],
+    dtermLpf: 70, iMax: 300 },
+  { ...cloneTune(), name: 'Freestyle / filthy',
+    rates: ratesProfile({ maxRate: 1050, centerSens: 110, expo: 10, yawExpo: 8 }),
+    p: [52, 56, 50], i: [50, 53, 48], d: [34, 36, 0], f: [65, 68, 65],
+    gyroLpf2: 180, dtermLpf: 55, itermRelax: 5, dynNotchDepth: 130 },
+  { ...cloneTune(), name: 'Long range / efficient',
+    rates: ratesProfile({ maxRate: 520, centerSens: 65, expo: 20, yawExpo: 16 }),
+    p: [35, 38, 36], i: [42, 45, 42], d: [26, 28, 0], f: [38, 40, 38],
+    gyroLpf2: 160, dtermLpf: 60, dynNotchDepth: 80 },
 ];
 
 /* --------------------------------------------------------------- PID axis */
@@ -146,6 +189,15 @@ export class FlightController {
   constructor(spec, tune = cloneTune(), opts = {}) {
     this.spec = spec;
     this.tune = tune;
+    // Rates live in their own structure now (Betaflight profile + per axis), not
+    // as flat fields on the tune. normaliseRates migrates an older saved tune,
+    // which only had the flat rcRate/expo/centerSens/maxRate knobs.
+    // Rates live in their own structure now (Betaflight profile + per axis), not
+    // as flat fields on the tune. normaliseRates migrates an older saved tune,
+    // which only had the flat rcRate/expo/centerSens/maxRate knobs. applyTune
+    // re-points this at whatever tune is current, so it is set up here too.
+    if (!tune.rates) tune.rates = normaliseRates(undefined, tune);
+    this.rates = tune.rates;
     this.gyroHz = opts.gyroRate || 8000;   // rate the gyro filter chain assumes
     this.pidDivisor = opts.pidDivisor || 2;  // physics ticks between PID runs
     this.pidHz = opts.pidHz || (this.gyroHz / this.pidDivisor);
@@ -216,6 +268,12 @@ export class FlightController {
     this.ffSmooth.forEach((f) => { f.tau = t.ffSmoothTau; });
     this.pSmooth.forEach((f) => { f.tau = t.pSmoothTau; });
     this.mode = t.mode || 'acro';
+    // Rates are a live reference to `tune.rates`, not a copy: the Tune view
+    // edits them in place, and swapping to a library preset replaces `this.tune`
+    // wholesale, so this is the one place that has to re-point it. Without it a
+    // preset change would leave the old rate curve in force.
+    if (!t.rates) t.rates = normaliseRates(undefined, t);
+    this.rates = t.rates;
   }
 
   /* -------------------------------------------------------------- gyro */
@@ -265,18 +323,17 @@ export class FlightController {
 
   /* ------------------------------------------------------------- rates */
 
-  /** Betaflight "actual" rate curve for a stick position in -1..1. */
-  stickToRate(stick, t = this.tune) {
-    const rc = clamp(stick, -1, 1);
-    const acExpo = clamp(t.expo, 0, 100) / 100;
-    const centerActual = t.centerSens * (1 - acExpo) + acExpo * 10;
-    const a = Math.abs(rc);
-    if (a < 1e-4) return 0;
-    // pure expo near centre, then a power curve to max rate
-    const shaped = a * (1 - acExpo) + acExpo * a * a * a;
-    const powered = Math.pow(shaped, 1 / (1 + acExpo * 1.5));
-    const rate = centerActual + (t.maxRate - centerActual) * powered;
-    return sign(rc) * rate;
+  /**
+   * Stick command -> rate setpoint, in deg/s, through the active Betaflight
+   * rate profile. `axis` is 'roll' | 'pitch' | 'yaw'.
+   *
+   * The rate curve itself lives in sim/rates.js, which implements Actual,
+   * Betaflight and Kiss properly. It used to be an inline hybrid that read the
+   * legacy rcRate/expo knobs and applied a curve matching neither convention,
+   * so a tune ported from the configurator behaved differently here.
+   */
+  stickToRate(stick, axis = 'roll') {
+    return rateStickToRate(stick, axis, this.rates);
   }
 
   /* --------------------------------------------------------- angle mode */
@@ -291,14 +348,26 @@ export class FlightController {
     if (this.mode === 'angle' || this.mode === 'horizon') {
       const blend = this.mode === 'horizon'
         ? clamp(Math.abs(sticks.x) + Math.abs(sticks.y), 0, 1) : 1;
-      const kp = 9.0;
-      sp.x = clamp((dRoll - euler.roll * DEG) * kp, -520, 520) * blend;
-      sp.y = clamp((dPitch - euler.pitch * DEG) * kp, -520, 520) * blend;
-      sp.z = this.stickToRate(sticks.z, t);
+      // Attitude error as a rotation vector, not as a difference of Euler
+      // angles. The ZYX extraction used for `euler` is gimbal-locked at pitch
+      // +-90, where the reported pitch jumps 180 degrees in one step; feeding
+      // that into the error saturated the loop and the craft rolled end over
+      // end through the singularity. The rotation vector has no singularity.
+      const rate = attitudeErrorRate(quat, {
+        roll: dRoll * DEG, pitch: dPitch * DEG, yaw: euler.yaw,
+      }, 9.0, 9.1);
+      // attitudeErrorRate returns rad/s; the gyro and setpoints are in deg/s.
+      // DEG is pi/180 (degrees -> radians), so this is a DIVISION. Multiplying
+      // scaled the setpoint down by ~3000x and angle mode sat at 0 degrees.
+      sp.x = rate.x / DEG * blend;
+      sp.y = rate.y / DEG * blend;
+      // Yaw stays on the rate curve: heading is a rate command, not an angle
+      // the craft should be driven to.
+      sp.z = this.stickToRate(sticks.z, 'yaw');
     } else {
-      sp.x = this.stickToRate(sticks.x, t);
-      sp.y = this.stickToRate(sticks.y, t);
-      sp.z = this.stickToRate(sticks.z, t);
+      sp.x = this.stickToRate(sticks.x, 'roll');
+      sp.y = this.stickToRate(sticks.y, 'pitch');
+      sp.z = this.stickToRate(sticks.z, 'yaw');
     }
     return sp;
   }
@@ -314,7 +383,8 @@ export class FlightController {
    */
   runPID(dt, sticks, euler, extra = {}) {
     const t = this.tune;
-    const sp = extra.setpoint || this.computeAngleModeSetpoint(sticks, null, euler, dt);
+    const sp = extra.setpoint
+      || this.computeAngleModeSetpoint(sticks, extra.quat, euler, dt);
     this.setpoint.x = sp.x; this.setpoint.y = sp.y; this.setpoint.z = sp.z;
 
     const gyro = [this.gyro.x, this.gyro.y, this.gyro.z];
@@ -348,14 +418,20 @@ export class FlightController {
       ax.pTerm = ax.pSmoothed;
 
       // --- D on measurement derivative, filtered and limited
+      // NEGATIVE, because `sum` drives the mixer in the same sense as P: a
+      // positive sum increases the rate. So when the gyro is already
+      // accelerating, D must subtract. With the sign the other way D was
+      // anti-damping - the craft got *less* stable with every unit of D added,
+      // which is the exact opposite of what D is for and is why a sweep over D
+      // showed overshoot climbing from 50% to 68% as D went 42 -> 90.
       const dGyro = (gv - prevsG[a]) / dt;
-      let dRaw = ax.d * dGyro * 1e-4;
+      let dRaw = -ax.d * dGyro * 1e-4;
       if (ax.d > 0) {
         dRaw = this.dNotch[0].update(dRaw);
         dRaw = this.dLpf[a].update(dRaw, dt);
         // D-max: the total authority D is allowed to use.
         const maxD = t.dMax;
-        const otherD = Math.abs(this.axis[1].dOut) + Math.abs(this.axis[2].dOut);
+        const otherD = Math.abs(this.axis[(a + 1) % 3].dOut) + Math.abs(this.axis[(a + 2) % 3].dOut);
         ax.dOut = clamp(dRaw, -(maxD - otherD) * 0.5, (maxD - otherD) * 0.5);
       } else {
         ax.dOut = 0;
@@ -531,3 +607,5 @@ function filtAxis(i, x, dt, fc, out) {
 function performanceNow() {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }
+
+

@@ -33,7 +33,16 @@ export class RaceView {
     this.renderTrackInfo();
 
     root.querySelector('#btn-race').onclick = () => this.startHeat();
-    root.querySelector('#sel-rivals').onchange = () => {};
+    // Rivals and laps are read when the heat starts, not live. The handler used
+    // to be empty, so the dropdown looked like it was doing something and wasn't.
+    const pending = () => {
+      const laps = this.root.querySelector('#sel-laps').value;
+      const rivals = this.root.querySelector('#sel-rivals').value;
+      this.message('info', `${rivals} rival${rivals === '1' ? '' : 's'}, `
+        + `${laps} lap${laps === '1' ? '' : 's'} - applies from the next heat.`);
+    };
+    root.querySelector('#sel-rivals').onchange = pending;
+    root.querySelector('#sel-laps').onchange = pending;
     // Arming is routed through the app, which already picks raceSim when the
     // race view is up. Without a visible control the only way in was the Enter
     // key, which is not discoverable.
@@ -118,6 +127,13 @@ export class RaceView {
       this.careerEl.appendChild(el('div', { class: 'warn-row info',
         text: `Win reputation to unlock ${getTrack(next).name}.` }));
     }
+    // Name the actual gap, so the target is a number to race toward rather than
+    // an open-ended grind.
+    for (const u of c.unlockables()) {
+      this.careerEl.appendChild(el('div', { class: 'warn-row info',
+        text: `${u.name}: ${Math.max(0, u.need - u.have)} more reputation `
+          + `(${u.have} / ${u.need}).` }));
+    }
   }
 
   startHeat() {
@@ -144,7 +160,9 @@ export class RaceView {
       p.name = `Rival ${i + 1}`;
       this.rivals.push(p);
     }
-    sim.reset({ x: track.start.x, y: 0.06, z: track.start.z, rebuildBattery: true });
+    // Use the track's own start height. It was hard-coded to 0.06, which put the
+    // grid on the ground plane - 34 m below the Rooftops start pad.
+    sim.reset({ x: track.start.x, y: track.start.y + 0.06, z: track.start.z, rebuildBattery: true });
     this.app.viewportR.buildTrack(track);
     this.app.raceview.buildTrackList();
     this.app.setRaceCameraDefault();
