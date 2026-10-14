@@ -27,6 +27,9 @@ export class RigidBody {
     this.vel = v3();      // world
     this.quat = q4();
     this.omega = v3();    // body frame rad/s
+    // Centre of mass in body coordinates. Null means "at the origin", so a body
+    // built without one keeps the old behaviour rather than reading NaN.
+    this.com = null;
     this.R = m3();        // cached rotation
     this.force = v3();    // world, cleared each step
     this.torque = v3();   // body, cleared each step
@@ -75,10 +78,19 @@ export class RigidBody {
     const w = m3mulVec(this.R, f, { x: 0, y: 0, z: 0 });
     this.force.x += w.x; this.force.y += w.y; this.force.z += w.z;
   }
-  /** Force applied at a body-frame point: contributes to the body torque. */
+  /**
+   * Force applied at a body-frame point: contributes to the body torque.
+   *
+   * `bodyPoint` is relative to the body ORIGIN, which is not the centre of mass.
+   * Torque is taken about the CG, so the lever arm has to be shifted first;
+   * otherwise every surface force picks up a spurious com x f moment.
+   */
   addForceAtBody(f, bodyPoint) {
     this.addForceBody(f);
-    const t = vcross(bodyPoint, f);
+    const c = this.com;
+    const t = vcross(c
+      ? { x: bodyPoint.x - c.x, y: bodyPoint.y - c.y, z: bodyPoint.z - c.z }
+      : bodyPoint, f);
     this.torque.x += t.x; this.torque.y += t.y; this.torque.z += t.z;
   }
   addTorqueBody(t) { this.torque.x += t.x; this.torque.y += t.y; this.torque.z += t.z; }
@@ -153,6 +165,11 @@ export class AeroSurface {
     this.type = type;        // 'plate' | 'arm' | 'disc' | 'canopy'
     this.cdPost = cdPost;    // base drag added behind the plate
     this.name = name;
+    // `active` gates the surface in applyAero. It has to be defaulted here, not
+    // left undefined: `if (!s.active) continue` treats undefined as false, so an
+    // unset flag silently disabled every surface and with it the whole flat-plate
+    // aero model, with no error anywhere to show for it.
+    this.active = true;
     // Scratch
     this.force = v3();
   }
@@ -177,17 +194,23 @@ export class AeroSurface {
     // Flat-plate normal force: peaks around 45 degrees, zero when flat.
     const CN = this.clSlope * s2;
     // Skin friction plus post-plate base drag, and pressure drag at incidence.
-    let CD = this.cd0 + (1.1 * s2 + this.cdPost) * (this.type === 'arm' ? 1.35 : 1);
-    // Arms are thin tubes: almost no normal force, mostly profile drag.
-    if (this.type === 'arm') { CD = this.cd0 + 1.1 * s2 + this.cdPost; }
+    // Arms are thin tubes: mostly profile drag, low normal force.
     // Disc: has meaningful drag even at zero incidence.
-    if (this.type === 'disc') { CD = this.cd0 + 0.9 * s2 + this.cdPost; }
-    const fx = -w.x / speed, fy = -w.y / speed, fz = -w.z / speed;  // drag direction
+    const typeFactor = this.type === 'arm' ? 1.35 : (this.type === 'disc' ? 0.9 : 1);
+    const CD = this.cd0 + (1.1 * s2 + this.cdPost) * typeFactor;
+    // `w` is the air's velocity in the BODY frame. The force the air exerts on the
+    // body points DOWNSTREAM, along +w: a body sitting in a westerly is pushed
+    // downwind, and a body moving through still air sees w = -v, so the same
+    // expression correctly opposes its motion. Negating w here instead gave a
+    // craft falling at 20 m/s 34 N of "drag" pushing it DOWN - six times its
+    // own weight - so it accelerated into the ground rather than braking.
+    const fx = w.x / speed, fy = w.y / speed, fz = w.z / speed;  // drag direction
     const N = CN * q;
     const D = CD * q;
-    // The plate is pushed away from whichever face the flow is hitting, so the
-    // normal force always opposes the through-flow component.
-    const sgn = un >= 0 ? -1 : 1;
+    // The plate's normal force is downstream too: sign(un) against the plate
+    // normal. A tilted plate therefore lifts when the flow comes from below it
+    // and presses down when the flow comes from above.
+    const sgn = un >= 0 ? 1 : -1;
     out.ax = N * sgn * n.x + D * fx;
     out.ay = N * sgn * n.y + D * fy;
     out.az = N * sgn * n.z + D * fz;
@@ -240,7 +263,7 @@ export function applyGroundContact(body, groundY = 0, restitution = 0.15, fricti
     const approachV = -body.vel.y;
     if (approachV > 0) fn = legDamp * approachV;
     fn += legStiff * pen;
-    fn += body.mass * G0 * 0.0; // gravity applied separately
+    // Gravity is applied by the integrator, not here.
     body.addForceWorld({ x: 0, y: fn, z: 0 });
     // Coulomb friction on tangential velocity
     const vtx = body.vel.x, vtz = body.vel.z;

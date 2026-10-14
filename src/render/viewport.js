@@ -51,7 +51,11 @@ export class Viewport {
     this.scene.add(this.ambient);
 
     this.weather = getWeather('clear');
-    this.weatherId = 'clear';
+    // Null means "the user has not chosen a sky", so a track's own `weather:`
+    // default applies. It was seeded with 'clear', and since `'clear' || t.weather`
+    // always took the first operand, no track default could ever reach the scene.
+    this.weatherId = null;
+    this.weatherExplicit = false;
     this.rain = null;
 
     // Open sky. The dome replaces a flat background colour and also generates
@@ -126,9 +130,11 @@ export class Viewport {
     const t = track || {};
     this.track = t;
     this.bounds = t.bounds || { half: 200, ceiling: 90 };
-    // The user's choice wins; the track's weather is only the initial default,
-    // otherwise changing track would silently undo the sky you picked.
-    this.applyWeather(this.weatherId || t.weather || 'clear');
+    // An explicit user choice wins and sticks across track changes; otherwise the
+    // track's own weather is the default, so loading the hangar over a sunny
+    // rooftop actually looks overcast.
+    const chosen = this.weatherExplicit ? this.weatherId : null;
+    this.applyWeather(chosen || t.weather || 'clear');
     const g = this.gridHelper;
     g.position.set(0, 0.002, 0);
     g.visible = !t.interior;
@@ -437,7 +443,9 @@ export class Viewport {
         roughness: 0.9, metalness: 0, side: THREE.DoubleSide, depthWrite: false,
       }));
     pad.rotation.x = -Math.PI / 2;
-    pad.position.set(track.start.x, 0.02, track.start.z);
+    // On the track's start pad, which is at the track's own height - not always
+    // the ground plane. Rooftops starts 34 m up.
+    pad.position.set(track.start.x, track.start.y + 0.02, track.start.z);
     this.trackGroup.add(pad);
     this.startPad = pad;
 
@@ -448,7 +456,7 @@ export class Viewport {
       new THREE.MeshBasicMaterial({ color: 0xe0e6ec }));
     body.position.y = 0.8;
     pilot.add(body);
-    pilot.position.set(track.pilot.x, 0, track.pilot.z);
+    pilot.position.set(track.pilot.x, track.pilot.y - 0.8, track.pilot.z);
     this.trackGroup.add(pilot);
     this.pilotMarker = pilot;
   }

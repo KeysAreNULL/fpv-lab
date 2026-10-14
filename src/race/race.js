@@ -57,6 +57,7 @@ export class Race {
   /** Feed the craft state once per frame. */
   update(dt, now, pos, quat, vel) {
     this.heatTime += dt;
+    this.lastUpdate = now;
     if (this.state !== 'flying') return;
     const g = this.gates[this.gateIndex];
     if (!g) return;
@@ -69,10 +70,6 @@ export class Race {
     const lateral = Math.hypot(dx - along * g.nx, dy, dz - along * g.nz);
     const prevAlong = this.prevAlong;
     const crossed = prevAlong != null && prevAlong < 0 && along >= 0;
-    const inside = crossed && lateral < g.r;
-
-    // Distance travelled towards the gate, for a more forgiving approach.
-    const dxp = prevAlong != null ? along - prevAlong : 0;
 
     if (crossed) {
       if (lateral < g.r) {
@@ -137,14 +134,19 @@ export class Race {
     } else {
       this.emit('lap', `Lap ${this.lap + 1}: ${fmt.timeMs(adj)}`);
     }
+    const lapPenalty = this.penalty;
     this.penalty = 0;
     this.lap++;
     this.lapStart = now;
     if (this.lap >= this.laps) {
       this.state = 'finished';
-      this.finishTime = now - this.startTime + this.penalty;
+      // Official time is the sum of the *adjusted* lap times, since each already
+      // carries its own missed-gate penalty. It used to be raw wall time plus a
+      // penalty that had just been zeroed one line earlier, so it was always
+      // just the raw time.
+      this.finishTime = this.lapTimes.reduce((a, b) => a + b, 0);
       this.emit('finish', `Finished: ${fmt.timeMs(this.finishTime)}`
-        + (this.penalty ? ` (incl. ${this.penalty} s penalty)` : ''));
+        + (lapPenalty ? ` (incl. ${lapPenalty} s penalty)` : ''));
     } else {
       this.gateIndex = 0;
     }
@@ -158,7 +160,11 @@ export class Race {
     const total = this.lapTimes.reduce((a, b) => a + b, 0);
     return {
       laps: this.lapTimes.length,
-      total: this.state === 'finished' ? total : (this.lapTimes.length ? total : nowish()),
+      // Elapsed time is only known once there is a lap to measure it from; with
+      // no completed lap the running figure is the live clock off the race.
+      total: this.state === 'finished' ? total
+        : (this.lapTimes.length ? total : (this.lastLapStart != null
+          ? Math.max(0, (this.lastUpdate ?? 0) - this.lapStart) : 0)),
       lapTimes: this.lapTimes.slice(),
       bestLap: this.bestLap,
       gatesPassed: this.gatesPassed,
@@ -168,7 +174,6 @@ export class Race {
     };
   }
 }
-const nowish = () => 0;
 
 /**
  * Simple AI rival: follows the racing line with a lookahead, a speed limit that
@@ -226,6 +231,9 @@ export class GhostPilot {
 
 export const CAREER_STARTS = { cash: 320, tier: 0, reputation: 0 };
 
+/** Progression order. Defined once so the career layer and the UI cannot drift. */
+const TRACK_ORDER = ['t-hangar', 't-rooftops', 't-suburb', 't-forest', 't-tower'];
+
 export class Career {
   constructor(state) {
     this.cash = state?.cash ?? CAREER_STARTS.cash;
@@ -242,13 +250,26 @@ export class Career {
     return this.tracks.has(trackId) && t.tier <= this.tier + 1;
   }
 
-  /** Unlock the next tier's track once you have banked enough reputation. */
+  /**
+   * Reputation still owed before each locked track opens up. This is what the
+   * career panel shows; it used to be a stub returning `[]` from two identical
+   * branches, so the panel could never say what you were working toward.
+   */
   unlockables() {
-    return Object.values({}).length ? [] : [];
+    const REP_GATES = [0, 400, 1200, 2600, 4000];
+    return TRACK_ORDER.filter((id) => {
+      const t = getTrack(id);
+      return !this.tracks.has(id) && t.tier <= this.tier + 1;
+    }).map((id) => ({
+      trackId: id,
+      name: getTrack(id).name,
+      need: REP_GATES[getTrack(id).tier + 1] ?? REP_GATES[REP_GATES.length - 1],
+      have: this.rep,
+    }));
   }
 
   availableTracks() {
-    const all = ['t-hangar', 't-rooftops', 't-suburb', 't-forest', 't-tower'];
+    const all = [...TRACK_ORDER];
     return all.filter((id) => {
       const t = getTrack(id);
       return t.tier <= this.tier + 1;
@@ -291,7 +312,7 @@ export class Career {
   }
 
   nextTrackId() {
-    const order = ['t-hangar', 't-rooftops', 't-suburb', 't-forest', 't-tower'];
+    const order = [...TRACK_ORDER];
     const idx = Math.min(order.length - 1, this.tier);
     return order[idx];
   }

@@ -7,6 +7,17 @@
 
 import { el, clear, sliderRow, selectRow, segButtons, Scope } from './dom.js';
 import { TUNE_LIBRARY, cloneTune, DEFAULT_TUNE } from '../sim/fc.js';
+import { RATE_PROFILES, PROFILE_LABELS, sampleCurve } from '../sim/rates.js';
+
+// One line explaining each profile, the way the Betaflight page does.
+const RATE_PROFILE_NOTES = {
+  actual: 'Actual: deg/s at centre, expo to max rate. This is what almost '
+    + 'everyone means by "my rates".',
+  betaflight: 'Betaflight: the legacy rc-rate / super-rate curve, kept so an old '
+    + 'tune still means what it meant.',
+  kiss: 'Kiss: centre rate plus super rate, no expo. Maximum control, minimum '
+    + 'forgiveness.',
+};
 
 const AXES = [
   { key: 0, label: 'Roll' },
@@ -42,7 +53,7 @@ export class TuneView {
     }, [
       el('span', { class: 'pn', text: t.name }),
       el('span', { class: 'pb',
-        text: `P ${t.p.join('/')} · D ${t.d.join('/')} · rc ${t.rcRate}` }),
+        text: `P ${t.p.join('/')} · D ${t.d.join('/')} · ${PROFILE_LABELS[(t.rates || {}).type] || 'Actual'} rates` }),
     ]));
     this.libButtons.forEach((b) => this.lib.appendChild(b));
   }
@@ -82,21 +93,43 @@ export class TuneView {
     const t = this.app.tune;
     clear(this.pidEl);
 
-    // Rates card
-    const rates = el('div', { class: 'pidcard' });
+    // Rates card: Betaflight's Rates page - profile switch, per-axis knobs, live
+    // curve. The FC owns the rates object, so edits write straight through it.
+    const rates = el('div', { class: 'pidcard rates-card' });
     rates.appendChild(el('h3', { text: 'Rates' }));
-    const rSlider = (label, key, min, max, step, unit, desc) => {
-      rates.appendChild(sliderRow(label, {
-        min, max, step, value: t[key], unit,
-        onInput: (v) => { t[key] = v; this.app.pushTune(); },
-        desc,
-      }));
+    const R = this.app.sim.craft.fc.rates;
+    const push = () => {
+      this.app.pushTune();
+      this.drawRateCurve();
+      this.updateRatePrediction();
     };
-    rSlider('Rc rate', 'rcRate', 100, 500, 5, '', 'how far the stick throws the rate');
-    rSlider('Expo', 'expo', 0, 100, 1, '', 'flat near centre, linear at the ends');
-    rSlider('Centre', 'centerSens', 20, 200, 5, '', 'deg/s at small stick');
-    rSlider('Max rate', 'maxRate', 200, 1400, 10, '°/s', 'rate at full stick');
+    rates.appendChild(segButtons(
+      RATE_PROFILES.map((p) => ({ value: p, label: PROFILE_LABELS[p] })),
+      R.type,
+      (v) => {
+        R.type = v;
+        push();
+        this.buildRates();      // the sliders differ per profile
+      }));
+    rates.appendChild(el('div', { class: 'desc', text: RATE_PROFILE_NOTES[R.type] }));
+    rates.appendChild(sliderRow('Deadzone', {
+      min: 0, max: 0.2, step: 0.01, value: R.deadzone,
+      onInput: (v) => { R.deadzone = v; push(); },
+      desc: 'Stick travel ignored at centre, then rescaled so full deflection '
+        + 'still reaches max rate.',
+    }));
+    this.rateAxesEl = el('div', { class: 'rate-axes' });
+    rates.appendChild(this.rateAxesEl);
+    this.rateCanvas = el('canvas', { class: 'rate-curve', width: 260, height: 120 });
+    rates.appendChild(this.rateCanvas);
+    rates.appendChild(el('div', { class: 'rate-legend' }, [
+      el('span', { class: 'rl rl-roll', text: 'roll' }),
+      el('span', { class: 'rl rl-pitch', text: 'pitch' }),
+      el('span', { class: 'rl rl-yaw', text: 'yaw' }),
+    ]));
     this.pidEl.appendChild(rates);
+    this.buildRates();
+    this.drawRateCurve();
 
     // PID cards
     for (const ax of AXES) {
@@ -188,12 +221,123 @@ export class TuneView {
     this.filtersEl.appendChild(feel);
   }
 
+  /**
+   * Per-axis rate sliders. Which knobs appear depends on the active profile,
+   * exactly as in Betaflight: Actual shows Centre sens / Max rate / Expo,
+   * Betaflight shows Rc rate / Super rate / Expo / Rc expo, Kiss shows only
+   * Rc rate / Super rate.
+   */
+  buildRates() {
+    if (!this.rateAxesEl) return;
+    const R = this.app.sim.craft.fc.rates;
+    clear(this.rateAxesEl);
+
+    for (const ax of [{ key: 'roll', label: 'Roll' },
+      { key: 'pitch', label: 'Pitch' }, { key: 'yaw', label: 'Yaw' }]) {
+      const cfg = R.axes[ax.key];
+      const card = el('div', { class: 'rate-axis' });
+      card.appendChild(el('h4', { text: ax.label }));
+      const s = (label, key, min, max, step, unit, desc) => {
+        card.appendChild(sliderRow(label, {
+          min, max, step, value: cfg[key], unit,
+          onInput: (v) => {
+            cfg[key] = v;
+            this.app.pushTune();
+            this.drawRateCurve();
+            this.updateRatePrediction();
+          },
+          desc,
+        }));
+      };
+
+      if (R.type === 'kiss') {
+        s('Rc rate', 'rcRate', 50, 600, 5, '', 'deg/s at stick centre');
+        s('Super rate', 'superRate', 0, 400, 5, '°/s', 'added at full stick');
+      } else if (R.type === 'betaflight') {
+        s('Rc rate', 'rcRate', 50, 600, 5, '', 'deg/s at stick centre');
+        s('Super rate', 'superRate', 0, 400, 5, '°/s', 'added at full stick');
+        s('Expo', 'expo', 0, 100, 1, '', 'curves the super-rate term');
+        s('Rc expo', 'rcExpo', 0, 100, 1, '', 'shapes the stick before the rate');
+      } else {
+        s('Centre sens', 'centerSensitivity', 10, 300, 1, '°/s',
+          'rate at the first degree of stick');
+        s('Max rate', 'maxRate', 100, 1800, 10, '°/s', 'rate at full stick');
+        s('Expo', 'expo', 0, 100, 1, '', '0 is linear, higher is flatter at centre');
+      }
+      this.rateAxesEl.appendChild(card);
+    }
+  }
+
+  /**
+   * Draw the three rate curves. Recomputed on every slider move so the effect of
+   * a change is visible immediately rather than described.
+   */
+  drawRateCurve() {
+    const cv = this.rateCanvas;
+    if (!cv || !cv.getContext) return;
+    const ctx = cv.getContext('2d');
+    const R = this.app.sim.craft.fc.rates;
+    const W = cv.width, H = cv.height;
+    const pad = { l: 32, r: 6, t: 8, b: 14 };
+    const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(10,13,17,0.55)';
+    ctx.fillRect(0, 0, W, H);
+
+    // One shared full scale across all three axes, so they are comparable.
+    let maxRate = 1;
+    for (const a of ['roll', 'pitch', 'yaw']) {
+      const c = R.axes[a];
+      maxRate = Math.max(maxRate, c.maxRate ?? (c.rcRate + (c.superRate || 0)));
+    }
+    maxRate = Math.ceil(maxRate / 200) * 200;
+
+    ctx.strokeStyle = 'rgba(140,160,180,0.18)';
+    ctx.lineWidth = 1;
+    ctx.font = '9px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(140,160,180,0.7)';
+    ctx.textAlign = 'right';
+    for (let i = 0; i <= 4; i++) {
+      const y = pad.t + ih - (i / 4) * ih;
+      ctx.beginPath();
+      ctx.moveTo(pad.l, y);
+      ctx.lineTo(pad.l + iw, y);
+      ctx.stroke();
+      ctx.fillText(String(Math.round((i / 4) * maxRate)), pad.l - 3, y + 3);
+    }
+    ctx.textAlign = 'center';
+    for (let i = 0; i <= 4; i++) {
+      const x = pad.l + (i / 4) * iw;
+      ctx.beginPath();
+      ctx.moveTo(x, pad.t);
+      ctx.lineTo(x, pad.t + ih);
+      ctx.stroke();
+    }
+    ctx.fillText('0%', pad.l, H - 3);
+    ctx.fillText('100%', pad.l + iw, H - 3);
+    ctx.textAlign = 'left';
+
+    const COLOURS = { roll: '#58b7e8', pitch: '#e0a04a', yaw: '#7fd6a8' };
+    for (const a of ['roll', 'pitch', 'yaw']) {
+      ctx.strokeStyle = COLOURS[a];
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      sampleCurve(a, R, 64).forEach((p, i) => {
+        const x = pad.l + p.stick * iw;
+        const y = pad.t + ih - (p.rate / maxRate) * ih;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    }
+  }
+
   updateRatePrediction() {
     if (!this.ratePred) return;
     const fc = this.app.sim.craft.fc;
     const out = [];
     for (const s of [0.25, 0.5, 0.75, 1.0]) {
-      out.push(`${(s * 100).toFixed(0)}% = ${fc.stickToRate(s).toFixed(0)}°/s`);
+      out.push(`${(s * 100).toFixed(0)}% = ${fc.stickToRate(s, 'roll').toFixed(0)}°/s`);
     }
     this.ratePred.textContent = 'Stick ' + out.join('  ·  ');
     if (!this.tuneFeel) return;

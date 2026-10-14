@@ -314,7 +314,7 @@ export function framePropClass(frame) {
   if (d < 70) return '2.5"';
   if (d < 82) return '3"';
   if (d < 95) return '3.5"';
-  if (d < 120) return '3.5"';
+  if (d < 120) return '4"';
   if (d < 140) return '5"';
   if (d < 168) return '6"';
   if (d < 210) return '7"';

@@ -58,8 +58,6 @@ manager.onProgress = (_url, loaded, total) => {
   TEXTURES_READY.loaded = loaded;
   TEXTURES_READY.total = total;
 };
-manager.onLoad = () => { TEXTURES_READY.done = true; };
-manager.onError = () => { TEXTURES_READY.failed++; };
 
 function loadTex(name, slot) {
   const key = `${name}_${slot}`;
@@ -107,9 +105,25 @@ export function scaleBoxUV(geo, sx, sy, sz, perMetre) {
   return geo;
 }
 
+// Clones made before their source texture has finished downloading cannot be
+// uploaded yet: `image` is null, and forcing needsUpdate on them makes three log
+// "Texture marked for update but no image data found" once per clone. Park them
+// against their source and flag them when that source actually has pixels.
+const pendingClones = new Map();   // clone -> source texture
+function flushPendingClones() {
+  for (const [clone, src] of pendingClones) if (src.image) clone.needsUpdate = true;
+  pendingClones.clear();
+}
+manager.onLoad = () => { TEXTURES_READY.done = true; flushPendingClones(); };
+manager.onError = () => { TEXTURES_READY.failed++; flushPendingClones(); };
+
 function applyMaps(set, repeat) {
   const out = {};
   if (!set.maps) return out;
+  // Re-sweep first: a material can be built after onLoad has already fired (a
+  // later track introducing a new tiling), and those clones would otherwise sit
+  // in the pending map forever, un-uploaded.
+  flushPendingClones();
   const color = loadTex(set.maps, 'Color');
   const normal = loadTex(set.maps, 'NormalGL');
   const rough = loadTex(set.maps, 'Roughness');
@@ -117,7 +131,7 @@ function applyMaps(set, repeat) {
   // crate, and the cached texture is shared.
   for (const [k, t] of [['map', color], ['normalMap', normal], ['roughnessMap', rough]]) {
     const c = t.clone();
-    c.needsUpdate = true;
+    if (t.image) c.needsUpdate = true; else pendingClones.set(c, t);
     c.wrapS = c.wrapT = THREE.RepeatWrapping;
     if (repeat) c.repeat.set(repeat[0], repeat[1]);
     out[k] = c;

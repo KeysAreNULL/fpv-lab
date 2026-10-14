@@ -20,6 +20,16 @@ Then open <http://localhost:8123>. Add `?debug=1` to publish diagnostics onto
 ```sh
 node tests/physics.test.mjs    # 73 checks: prop, motor, battery, FC, body, collision
 node tests/frame.test.mjs      # 21 checks: body-frame signs, hover, reaction torque
+node tests/aero.test.mjs       # flat-plate aerodynamics is actually live
+node tests/controls.test.mjs   # channel bindings, expo, deadzone, invert
+node tests/rates.test.mjs      # the three Betaflight rate profiles
+node tests/rates.fc.test.mjs   # ...and that the FC actually applies them
+node tests/pid.test.mjs        # D damps and P stiffens - the direction of each term
+node tests/propgeom.test.mjs   # prop blades are coplanar and correctly pitched
+node tests/flight.test.mjs     # hands-off hover holds attitude and does not drift
+node tests/stress.test.mjs     # sustained flight on real key input, every track
+node tests/recover.test.mjs    # reset rescues a diverged craft; a watchdog exists
+node tests/attitude.test.mjs   # CG on the thrust axis; angle mode is singularity-free
 node tests/imports.mjs         # every module parses
 ```
 
@@ -60,7 +70,7 @@ extents, which is how it was caught:
 | identity | 1.378 | 1.378 | 0.201 ← on its side |
 | `Q_LEVEL` | 1.378 | 0.201 | 1.378 ← flat |
 
-Mixer signs follow from that frame (`MIX_TABLE` in `craft.js`):
+Mixer signs follow from that frame (`MIX_TABLE` in `fc.js`):
 
 - roll right = more thrust on the **left** motors
 - pitch nose-up = more thrust on the **front** motors
@@ -181,6 +191,239 @@ The model is rebuilt only when the spec string changes: `build()` stores
 `JSON.stringify(spec)` because `update()` compares against a string, and
 storing the object tore the whole model down and rebuilt it every frame.
 
+## Rates
+
+The Tune view's Rates card is Betaflight's Rates page: a profile switch, per-axis
+knobs, and a live curve for all three axes.
+
+All three of Betaflight's profile types are implemented as the real formulas, in
+`src/sim/rates.js`:
+
+```
+Actual:     rate = stick * centerSensitivity
+                 + sign(stick) * |stick|^actualExpo * (maxRate - centerSensitivity)
+Betaflight: rate = stick * rcRate + sign(stick) * |stick|^expo * superRate
+                    (stick pre-shaped by rcExpo)
+Kiss:       rate = stick * rcRate + sign(stick) * |stick| * superRate
+```
+
+with `actualExpo = 10^(expo/100)`, so expo 0 is linear and expo 100 is very flat
+at centre. Stick goes through a shared deadzone first — `applyDeadzoneRange`
+rescales the surviving travel, so full deflection still reaches max rate past
+the deadzone rather than quietly capping below it.
+
+Sliders shown per axis depend on the profile, as in Betaflight: Actual gets
+**Centre sens / Max rate / Expo**, Betaflight gets **Rc rate / Super rate /
+Expo / Rc expo**, Kiss gets **Rc rate / Super rate**. Yaw carries its own,
+slower and flatter, defaults the way every real tune sets it up.
+
+This replaced an inline hybrid that read Betaflight's legacy `rcRate`/`expo`
+knobs and then applied a hand-rolled curve matching neither convention, so a tune
+ported from the configurator behaved differently here. Old saves are migrated by
+`normaliseRates()`, which maps the flat `rcRate`/`expo`/`centerSens`/`maxRate`
+fields onto roll and pitch.
+
+`rates` is a live reference held on the tune (`fc.rates === fc.tune.rates`), and
+`applyTune()` re-points it. That matters: the Tune view edits rates in place, and
+picking a library preset replaces `fc.tune` wholesale, so without the re-point a
+preset change would silently leave the old curve in force.
+
+## Controls
+
+The Simulator's **Controls** panel binds a physical control surface to each of
+the four flight channels (throttle, roll, pitch, yaw).
+
+It is click-to-bind rather than a dropdown, because the mapping cannot be
+enumerated ahead of time. A **RadioMaster Pocket** on USB enumerates as a
+gamepad, but which axes its gimbals land on depends on the radio's joystick
+driver and on how the radio is configured. So: click **Bind** on a channel, move
+the stick or press the button you want on it, and the panel assigns whatever
+moved. **Bind keyboard to &lt;channel&gt;** does the same for a key.
+
+Per channel you then get invert, deadzone and expo. Expo matters more than it
+looks: at expo 0 a gimbal is linear and feels twitchy, at expo 1 it is cubic and
+hover trim becomes easy while full deflection is still reachable. **Calibrate
+centre** records the current value as zero, for a gimbal that does not return to
+exactly centre.
+
+The binding model lives in `src/sim/controls.js` and is deliberately DOM-free so
+it can be tested headless (`tests/controls.test.mjs`). A channel that is
+unbound, or bound to a surface that is not currently connected, resolves to
+`null` and falls back to the keyboard rather than snapping to centre.
+
+Throttle is unidirectional in the sim (0..1), so a bipolar transmitter stick is
+mapped centre-to-zero and full-deflection-to-one.
+
+Every channel row carries an **inv** toggle directly beside its Bind button. A
+transmitter whose yaw axis reads backwards is the single most common thing to get
+wrong when binding, so it should not be buried behind selecting the channel first.
+
+## Bugs worth writing down
+
+All of these failed silently, with no error anywhere. They are noted rather than
+just fixed because each one produced plausible-looking output.
+
+**The aerodynamics were switched off, and nothing said so.**
+`applyAero` gates every surface on `s.active`. Nothing in the codebase ever set
+that field, and `!undefined` is true, so *every* surface was skipped: the whole
+flat-plate model documented above was a no-op and `aeroDrag` was permanently
+exactly 0.
+
+**The aerodynamic forces pointed the wrong way.** The drag vector was negated
+(`-w` instead of `+w`) and the plate normal force used the wrong sign. `w` is the
+air's velocity in the body frame, and the force the air exerts points *downstream,
+along +w* — a body sitting in a westerly is pushed downwind. With both signs
+inverted, a craft falling at 20 m/s picked up **34 N of "drag" pushing it down**,
+six times its own weight, so it accelerated into the ground instead of braking,
+and a tilted plate pushed down where it should have lifted. The craft tumbled,
+and any impact on a slab at 10 m/s or faster produced **NaN**.
+
+**The prop discs and arms were modelled as flat plates normal to thrust.**
+Roll rate `ωx` puts a `z`-velocity differential across any surface with `y ≠ 0`,
+and a normal force on that surface produces more roll torque. Positive feedback:
+the craft reached 892 rad/s and NaN in 1.3 s. A disc's normal force *is* thrust,
+and `prop.solve()` already computes it, so arms and discs are drag-only now and
+roll damping comes from the drag term.
+
+**The prop blades were pitched about a fixed world axis.**
+`rotation.z = spin` and `rotation.x = pitch` on the same object compose as
+`Rx·Ry·Rz`, so the pitch landed about world X *after* the spin. Measured pitch
+about each blade's own radial axis came out **−9.2 / 0.0 / +9.2 / 0.0 degrees** on
+a 4-blade — an 18.4° spread, so the blades were not coplanar and each looked bent
+the wrong way. The sign was wrong too, making a reverse-pitch prop. Fixed with a
+nested group (outer spins about Z, inner pitches about X).
+
+**The D term had the wrong sign.** `sum` drives the mixer in the same sense as P,
+so D must *subtract* when the gyro is already accelerating. It was adding, which
+made D anti-damping: sweeping D from 42 to 90 made step overshoot climb from 50%
+to 68%. No test caught it, because every existing test asserted closed-loop
+tracking, which a destabilising D still satisfies. `tests/pid.test.mjs` now
+asserts the *direction* of each term.
+
+There was also a quieter cousin: `Simulation` passed `pidDivisor: 1` while
+alternating the PID loop every second tick. `stepCraft` hands `runPID` a
+`dt * pidDivisor`, so the FC believed its loop period was half the truth and D's
+derivative came out exactly 2× too large.
+
+### Measured behaviour after these fixes
+
+| preset | setpoint @50% stick | peak | overshoot | settle |
+| --- | --- | --- | --- | --- |
+| Stock 5" | 350 °/s | 425 °/s | 21% | 0.10 s |
+| Smooth / cinematic | 214 °/s | 243 °/s | 14% | 0.10 s |
+| Race / sharp | 531 °/s | 689 °/s | 30% | 0.10 s |
+| Freestyle / soft | 331 °/s | 395 °/s | 19% | 0.10 s |
+| Freestyle / filthy | 425 °/s | 541 °/s | 27% | 0.10 s |
+| Long range / efficient | 173 °/s | 188 °/s | 9% | 0.10 s |
+
+Free fall reaches 8.1 m/s terminal velocity; a 50 m drop rebounds 0.46 m.
+
+## Weight distribution, and why angle mode used to tumble
+
+**The CG sat ahead of the thrust line.** The pack is on the canopy pushed
+forward against the camera, which is where a real one lives, but the stack and
+camera are forward too, so everything pulled the centre of gravity ahead of the
+motor axis — **6.5 mm forward on the stock 5"**. Thrust acts on the motor axis
+while the body rotates about the CG, so that offset is a real nose-up moment, not
+a modelling detail: the craft pitched back on its own with the sticks centred.
+
+The pack position is now **solved** rather than guessed. `buildCraft` sums the
+forward moment of every part added before the battery and places the pack so the
+CG lands on the thrust axis — 0.00 mm fore/aft error on every frame, rather than
+only the one the numbers were read off. The CG still sits well *below* the thrust
+plane (about 23 mm on the stock build), which is what gives pendulum stability;
+that restoring moment only appears once the craft is tilted, so it costs nothing
+in level trim.
+
+**Body-frame force positions are measured from the origin, but torque is taken
+about the CG.** `addForceAtBody` was passing `bodyPoint` straight into the cross
+product, so every aerodynamic force picked up a spurious moment of `com × f`
+that scaled with airspeed. `body.com` now exists and the lever arm is shifted
+first.
+
+**`qToEuler` is gimbal-locked, and angle mode was differencing it.** ZYX is
+singular at pitch = ±90: crossing that attitude flips the reported pitch by 180°
+in a single step — **measured, a 289° jump** during a slow roll. Angle mode
+computed `(desired − euler) × kp`, so the error was garbage; the loop saturated,
+slammed the craft over, crossed the singularity again and oscillated through the
+full 360°. Asking for 13.8° produced a **360° peak-to-peak** swing.
+
+Angle mode now uses `attitudeErrorRate`, which takes the shortest rotation from
+the current attitude to the desired one as an axis-angle vector. That has no
+singularity anywhere, including inverted — the same approach Betaflight uses.
+Measured after: 13.8° requested, 13.4° held, **0.1° peak-to-peak**.
+
+`attitudeOf` itself still uses the ZYX extraction, so the HUD can still show a
+jump at exactly ±90° of pitch. That is inherent to reporting three angles for a
+rotating body and is cosmetic; nothing in the control loop depends on it now.
+
+## Losing the craft
+
+A rigid-body sim can be driven to a non-finite or astronomically large state by a
+transient: a bad frame time, a deep penetration, a filter blowing up. Once that
+happens **nothing recovers it on its own**. The camera follows the craft to
+infinity, so the map and the quad both vanish, and every subsequent step
+propagates the same infinities — which is why Reset looked like it did nothing.
+
+`Simulation.watchdog()` runs immediately after each integration step. If the
+craft's state is not finite, or it has left a generous margin around the arena
+(four times `bounds.half`, six times the ceiling), it is put back on its spawn
+point and the recovery is reported. The margins are deliberately loose: a fast
+craft legitimately leaves the arena for a moment, and this is a last resort, not
+a substitute for fixing the cause.
+
+`App.resetCraft()` additionally snaps both camera rigs, so a recovery is
+visible immediately instead of the rig spending seconds smoothing back from
+wherever it was.
+
+Restored bindings have to update the DOM as well as the model. `ControlsView`
+builds its rows in the constructor from the defaults, so a `load()` that only
+swapped the model left every checkbox showing the old value — a binding would
+load correctly and still read the wrong way on screen.
+
+Bindings persist through `persist()`, not only through the explicit Save. The
+Controls panel persists on every change, so with the field missing from
+`persist()` every rebind was written to `localStorage` and then dropped — the
+mapping never survived a reload even though the panel said it had.
+
+## Loading assets without re-downloading
+
+`serve.js` used to send `Cache-Control: no-store` on every response, and
+`scenery.js` fetched the glTF and its `.bin` buffers with `cache: 'no-store'`
+as well. Together those guaranteed that every page refresh re-downloaded the
+whole ~3.8 MB asset set.
+
+Now the server sends an `ETag` and answers conditional requests with `304 Not
+Modified`. Vendored assets — textures, models — are served
+`public, max-age=31536000, immutable`, so after the first load the browser does
+not even revalidate them. Source files are served `no-cache`, which stores but
+revalidates, so an edit is still picked up on refresh. The `cache: 'no-store'`
+fetches are gone; the existing empty-body retry is the real defence against a
+poisoned cache entry and was never the reason for them.
+
+Both of these failed silently, with no error anywhere, which is why they are
+noted rather than just fixed.
+
+**The aerodynamics were switched off and nothing said so.**
+`applyAero` gates every surface on `s.active`. Nothing in the codebase ever set
+that field, and `!undefined` is true, so *every* surface was skipped: the whole
+flat-plate model documented above was a no-op and `aeroDrag` was permanently
+exactly 0. The defaults are now set in the `AeroSurface` constructor, and
+`tests/aero.test.mjs` asserts the surfaces are live and that they respond to
+incidence and to airspeed — a test that fails if the gate ever comes back.
+
+For the stock 5" this changes the numbers a lot, because there was previously no
+air drag at all. Measured at 1.196 kg/m³, level, nose-first: **1.72 N at
+20 m/s, 3.87 N at 30 m/s, 15.5 N at 60 m/s** — 0.31 g at 20 m/s, which is in the
+right place for a 5" quad. The craft now actually reaches a terminal velocity
+instead of accelerating indefinitely.
+
+**The RF wavelength was short by a factor of a million.**
+`fresnelRadius` and the two-ray ground term used `299.792458 / fMHz`, which is
+metres-per-µs, not metres. At 5.8 GHz that produced a 51 mm wavelength instead
+of 51 m, so the Fresnel clearance radius was ~1000× too small and the knife-edge
+obstruction check effectively never fired. It is `299792458 / (fMHz * 1e6)` now.
+
 ## Weather and lighting
 
 `src/data/weather.js` defines seven complete lighting states — clear, hazy,
@@ -216,10 +459,10 @@ and video links updated at their own real frame rates.
 | Prop | Momentum theory with CT/FM curves anchored to published 5x4.3x3 data (1.20 kg @ 28k rpm, 3.22 g/W) |
 | Ground effect | Prandtl, from nearest-surface clearance to ground **or** ceiling — both are image surfaces |
 | Vortex ring state | Loss of thrust when descending faster than induced flow |
-| Propwash | Surface model: ground-effect turbulence plus a buffet term. Mutual prop-to-prop wash is geometrically impossible on a rigid planar quad and is deliberately not modelled |
+| Propwash | Surface model: ground-effect turbulence plus a buffet term, plus a 3-pass mutual prop-to-prop term. The *test* asserts mutual wash is negligible on a coplanar quad, which is geometrically true: the offset between two coplanar props lies in the disc plane and stays perpendicular to the disc normal under any rigid rotation of the frame |
 | Motor | Kt ≠ Ke (0.88 ratio), winding resistance scaling as `R ∝ KV^-1.7`, back-EMF, current limiting |
 | Battery | OCV curve, ESR sag, polarisation, temperature, cycle age, cell imbalance |
-| Airframe | Flat-plate aerodynamics, prop thrust and reaction torque, gyroscopic precession |
+| Airframe | Flat-plate aerodynamics on 11 surfaces (bottom plate, canopy, four arms, four prop discs, camera stack), prop thrust and reaction torque, gyroscopic precession |
 | Collision | Sphere vs AABB with penetration response; separate soft arena bounds as a backstop |
 | RF | Ray/AABB trace with material penetration loss and knife-edge diffraction |
 
@@ -267,10 +510,11 @@ racing line and capped every vertical line in the workshop.
 ```
 src/
   core/       math helpers
-  data/       parts catalog, track geometry, radio band plans
-  sim/        prop, motor, battery, fc, body, craft, environment, rf, sim
-  render/     viewport, drone mesh, cameras, fx
+  data/       parts catalog, track geometry, radio band plans, weather presets
+  sim/        prop, motor, battery, fc, body, craft, environment, rf, sim,
+              telemetry, rates (Betaflight profiles), controls (channel bindings)
+  render/     viewport, drone mesh, cameras, fx, scenery, sky, materials
   race/       race state machine, ghost pilots, career
-  ui/         builder, sim, tune, race views, dom helpers
-tests/        physics, frame, imports, browser QA
+  ui/         builder, sim, tune, race, controls views, dom helpers
+tests/        physics, frame, aero, controls, rates, rates.fc, imports, browser QA
 ```

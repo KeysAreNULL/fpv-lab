@@ -445,7 +445,10 @@ export class SimView {
     set('throttle', h.throttle.toFixed(0), h.throttle / 1000);
     set('current', h.current.toFixed(1), h.current / 120, h.current > 90 ? 'warn' : '');
     set('voltage', h.voltage.toFixed(2), h.voltage / (this.app.sim.craft.battSpec.cells * 4.2),
-      h.voltage < 3.6 * h.rpm.length && h.voltage < 3.6 * this.app.sim.craft.battery.cells ? 'bad' : 'good');
+      // Per-cell brownout threshold against the pack's real cell count. It was
+      // reading h.rpm.length (always 4 motors) as the cell count, so every 4S
+      // and 6S pack was being judged against a 14.4 V floor and never warned.
+      h.voltage < 3.6 * this.app.sim.craft.battery.cells ? 'bad' : 'good');
     set('sag', h.sag.toFixed(2), h.sag / 2, h.sag > 0.9 ? 'warn' : '');
     set('cell', h.cellV.toFixed(2), h.cellV / 4.2, h.cellV < 3.5 ? 'bad' : h.cellV < 3.65 ? 'warn' : '');
     set('rpm', (h.rpm.reduce((a, b) => a + b, 0) / 4 / 1000).toFixed(1),
@@ -453,9 +456,11 @@ export class SimView {
       Math.max(...h.rpm) > 34000 ? 'warn' : '');
     // Thrust and weight are both newtons, so this is a plain ratio, and it is
     // the number pilots actually quote. Full scale is 16:1, which puts a race
-    // build (10:1) at two thirds and leaves headroom for a lifter.
-    set('thrust', (h.thrust / h.weight).toFixed(2), 16,
-      h.thrust < h.weight ? 'bad' : 'good');
+    // build (10:1) at two thirds and leaves headroom for a lifter. The bar takes
+    // a *fraction*, so the ratio has to be divided by that full scale - passing
+    // 16 straight through pinned the bar at 100 % forever.
+    const tw = h.thrust / h.weight;
+    set('thrust', tw.toFixed(2), tw / 16, tw < 1 ? 'bad' : 'good');
     set('speed', h.speed.toFixed(1), h.speed / 40);
 
     const tr = this.app.sim.traces;

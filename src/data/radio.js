@@ -148,6 +148,9 @@ export function knifeEdgeLossDb(v) {
 
 // Fresnel radius at distance d from a link of total length D.
 export function fresnelRadius(d1, d2, fMHz) {
-  const lambda = 299.792458 / fMHz; // m
+  // c = 299,792,458 m/s and fMHz is in MHz, so lambda = c / (fMHz * 1e6).
+  // Dropping the 1e6 gave millimetres instead of metres, which made the Fresnel
+  // radius ~1000x too small and quietly disabled the knife-edge obstruction test.
+  const lambda = 299792458 / (fMHz * 1e6); // m
   return Math.sqrt((lambda * d1 * d2) / (d1 + d2));
 }

@@ -52,6 +52,26 @@ export class CameraRig {
 
   setMode(m) { this.mode = m; }
 
+  /**
+   * Drop the smoothing lag so the camera jumps straight to the craft.
+   *
+   * Without this, recovering from a lost craft looks like nothing happened: the
+   * simulation has been reset to the start pad, but the camera is still lerping
+   * back from wherever it was, and since the lerp is per-frame it takes a long
+   * time to come back from a large excursion. Reset has to feel immediate.
+   */
+  snap(craft) {
+    if (!craft) return;
+    const b = craft.body;
+    // If the craft itself is still somewhere impossible, do not chase it.
+    if (!Number.isFinite(b.pos.x) || !Number.isFinite(b.pos.y)) return;
+    this.chasePos.set(b.pos.x, b.pos.y + this.chaseHeight, b.pos.z + this.chaseDist);
+    this.chaseLook.set(b.pos.x, b.pos.y, b.pos.z);
+    this.fpvPos.set(b.pos.x, b.pos.y, b.pos.z);
+    this.shake = 0;
+    this._pending.length = 0;
+  }
+
   /** Where the FPV camera physically sits on the craft. */
   fpvMount(craft) {
     return {

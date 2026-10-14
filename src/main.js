@@ -20,6 +20,7 @@ import { BuilderView, PRESETS } from './ui/builder.js';
 import { SimView } from './ui/simview.js';
 import { TuneView } from './ui/tuneview.js';
 import { RaceView } from './ui/raceview.js';
+import { ControlsView } from './ui/controlsview.js';
 import { Career } from './race/race.js';
 import { attitudeOf, Q_LEVEL } from './sim/craft.js';
 import { preloadTextures } from './render/materials.js';
@@ -44,7 +45,9 @@ class App {
 
     this.load();
 
-    this.env = new Environment({ tempC: 22, turbulence: 0.2 });
+    // load() records the saved air temperature and turbulence here; without this
+    // the constructor's hard-coded 22 C / 0.2 threw away everything it read.
+    this.env = new Environment({ tempC: this.envTempC ?? 22, turbulence: this.envTurbulence ?? 0.2 });
     this.applyWind();
 
     this.sim = new Simulation({ spec: this.spec, env: this.env, tune: this.tune });
@@ -113,6 +116,13 @@ class App {
     this.simview = new SimView(simRoot, this);
     this.tuneview = new TuneView(tuneRoot, this);
     this.raceview = new RaceView(raceRoot, this);
+    // Controls has to come after simview (it reports through the message feed)
+    // and it owns the workshop sim's input bindings, so both sims get them.
+    this.controlsview = new ControlsView(simRoot, this);
+    if (this.controlsState) this.controlsview.load(this.controlsState);
+    for (const s of [this.sim, this.raceSim]) {
+      s.input.bindings = this.controlsview.bindings;
+    }
 
     // Tabs
     const tabs = [
@@ -150,6 +160,15 @@ class App {
       vp.resize();
       if (id === 'sim') this.sizeOverlay();
     }
+  }
+
+  /* ------------------------------------------------------------- messages */
+  /**
+   * Every view funnels its notices through here. SimView owns the DOM for the
+   * message feed, so this delegates rather than each view reaching for it.
+   */
+  message(kind, text) {
+    if (this.simview) this.simview.message(kind, text);
   }
 
   /* ------------------------------------------------------------- state */
@@ -219,18 +238,23 @@ class App {
 
   /* -------------------------------------------------------- persistence */
   save() {
-    const state = {
-      spec: this.spec, buildName: this.buildName, tune: this.tune,
-      career: this.career ? this.career.toJSON() : null,
-      garage: this.garage,
-      env: { windSpeed: this.windSpeed, windDir: this.windDir, gust: this.gust,
-        tempC: this.env.tempC, turbulence: this.env.turbulence },
-    };
+    // Push into the garage FIRST. Building `state` before the unshift captured
+    // the pre-push array, so on a first-ever save `garage` was undefined, got
+    // dropped by JSON.stringify, and the user got "Build saved to garage" for a
+    // save that saved nothing.
     this.garage = this.garage || [];
     this.garage.unshift({
       name: this.buildName, spec: this.spec, tune: this.tune, at: Date.now(),
     });
     if (this.garage.length > 12) this.garage.pop();
+    const state = {
+      spec: this.spec, buildName: this.buildName, tune: this.tune,
+      career: this.career ? this.career.toJSON() : null,
+      garage: this.garage,
+      controls: this.controlsview ? this.controlsview.toJSON() : null,
+      env: { windSpeed: this.windSpeed, windDir: this.windDir, gust: this.gust,
+        tempC: this.env.tempC, turbulence: this.env.turbulence },
+    };
     localStorage.setItem(STORE_KEY, JSON.stringify(state));
     this.simview.message('ok', 'Build saved to garage');
   }
@@ -249,9 +273,10 @@ class App {
         this.windSpeed = s.env.windSpeed ?? 2;
         this.windDir = s.env.windDir ?? 90;
         this.gust = s.env.gust ?? 1.5;
-        this._envTemp = s.env.tempC;
-        this._envTurb = s.env.turbulence;
+        this.envTempC = s.env.tempC;
+        this.envTurbulence = s.env.turbulence;
       }
+      if (s.controls) this.controlsState = s.controls;
     } catch (e) { /* corrupt store: start fresh */ }
   }
 
@@ -261,6 +286,16 @@ class App {
         spec: this.spec, buildName: this.buildName, tune: this.tune,
         career: this.career ? this.career.toJSON() : this.careerState,
         garage: this.garage,
+        // Control-surface bindings belong here, not only in save(). The Controls
+        // panel persists on every change, so without this field every rebind was
+        // written to localStorage and then dropped - the mapping never survived
+        // a reload even though the panel said it had.
+        controls: this.controlsview ? this.controlsview.toJSON() : null,
+        // persist() is what runs on ordinary edits, so env has to be written
+        // here too or a saved environment is lost the next time you change a part.
+        env: { windSpeed: this.windSpeed, windDir: this.windDir, gust: this.gust,
+          tempC: this.env ? this.env.tempC : 22,
+          turbulence: this.env ? this.env.turbulence : 0.2 },
       }));
     } catch (e) { /* storage full or blocked: not fatal */ }
   }
@@ -348,6 +383,11 @@ class App {
   resetCraft() {
     const sim = this.view === 'race' ? this.raceSim : this.sim;
     sim.reset({ rebuildBattery: false });
+    // Snap the cameras too. The simulation may already be back on the pad while
+    // the rig is still smoothing back from wherever it was, which reads as
+    // "Reset did nothing" - and from a lost craft that is most of the journey.
+    if (this.rig) this.rig.snap(sim.craft);
+    if (this.raceRig) this.raceRig.snap(sim.craft);
     this.updateArmButton();
   }
   updateArmButton() {
@@ -409,6 +449,10 @@ class App {
     this.viewportB.setStudio();
     this.raceSim.pilotPos = { ...track.pilot };
     this.sim.pilotPos = { ...track.pilot };
+    // Deliberately NOT moved to track.start. The workshop craft sits on the
+    // ground; several tracks have their start pad on a rooftop with no floor
+    // under it (Rooftops starts 34 m up over open air), so spawning it at the
+    // start height drops it into a 34 m fall the moment the track loads.
     if (this.raceview) this.raceview.renderTrackInfo();
   }
 
@@ -417,8 +461,9 @@ class App {
    * turbulence into the simulation, so "rain" means both a wet-looking sky and
    * a craft that is being buffeted.
    */
-  setWeather(id) {
+  setWeather(id, explicit = true) {
     this.weatherId = id;
+    this.weatherExplicit = explicit;
     const w = getWeather(id);
     for (const vp of [this.viewport, this.viewportR]) {
       if (vp) vp.applyWeather(id);
@@ -501,7 +546,7 @@ class App {
         ? { state: this.raceview.race.state, lap: this.raceview.race.lap,
           gate: this.raceview.race.gateIndex, laps: this.raceview.race.lapTimes.length } : null,
       weather: {
-        id: vp.weatherId,
+        id: vp.weatherId || 'clear',
         interior: !!(vp.track && vp.track.interior),
         track: vp.track ? vp.track.id : null,
         sun: +vp.key.intensity.toFixed(2),
@@ -539,6 +584,10 @@ class App {
     this.drone.group.quaternion.set(craft.body.quat.x, craft.body.quat.y,
       craft.body.quat.z, craft.body.quat.w);
     this.fx.update(dt, craft);
+    // If the watchdog pulled the craft back this frame, the rig would otherwise
+    // spend seconds smoothing home from wherever it was. Snap it so the recovery
+    // is visible.
+    if (sim.recoveredThisStep) { this.rig.snap(craft); sim.recoveredThisStep = false; }
     this.rig.update(craft, dt, { pilot: sim.pilotPos });
 
     this.rig.latencyMs = h.vtx.latency || 5;

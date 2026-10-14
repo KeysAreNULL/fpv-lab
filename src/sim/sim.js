@@ -14,6 +14,7 @@ import { Environment } from './environment.js';
 import { VideoLink, RadioLink, RFWorld } from './rf.js';
 import { Telemetry, makeTraces } from './telemetry.js';
 import { DEFAULT_TUNE, cloneTune } from './fc.js';
+import { defaultBindings, readBindings, shapeAxis } from './controls.js';
 
 export const PHYSICS_HZ = 8000;
 const MAX_SUBSTEPS = 400;          // cap so a long stall cannot lock the page
@@ -33,6 +34,15 @@ export class RCInput {
     this.enabled = true;
     this.gamepadDeadzone = 0.04;
     this.invertThrottle = false;
+    // Which physical surface drives which channel. Defaults to the keyboard
+    // mapping that has always been here; ui/controlsview.js lets the pilot
+    // rebind any channel to a gamepad axis or button, which is what makes a
+    // real transmitter (RadioMaster Pocket, EdgeTX over USB) usable - its sticks
+    // land on arbitrary axes, so the mapping cannot be hard-coded.
+    this.bindings = defaultBindings();
+    // Last resolved gamepad values, for the HUD and the controls panel.
+    this.padValues = { throttle: null, roll: null, pitch: null, yaw: null };
+    this.padsConnected = [];
   }
 
   key(code, down) {
@@ -75,26 +85,36 @@ export class RCInput {
     if (!this.invertThrottle && k.has('KeyX')) t = 0;
     r.throttle = clamp(t, 0, 1);
 
-    // gamepad overrides when it has real deflection
-    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-    for (const p of pads) {
-      if (!p) continue;
-      const dz = this.gamepadDeadzone;
-      const ax = (v) => (Math.abs(v) < dz ? 0 : (v - Math.sign(v) * dz) / (1 - dz));
-      const gx = ax(p.axes[0] || 0), gy = ax(p.axes[1] || 0);
-      const gz = (p.buttons[6] ? -1 : 0) + (p.buttons[7] ? 1 : 0);
-      const gt = p.buttons[7] ? 1 : p.buttons[6] ? 0 : -1;
-      if (Math.abs(gx) > 0.02) r.x = gx;
-      if (Math.abs(gy) > 0.02) r.y = -gy;
-      if (gz !== 0) r.z = gz;
-      if (gt >= 0) r.throttle = gt;
-      // button 0 = arm toggle
-      if (p.buttons[0] && p.buttons[0].pressed && !this._padArm) {
-        this._padArm = true;
-        if (this.onArmToggle) this.onArmToggle();
+    // Bound gamepad channels override the keyboard when they report a real
+    // deflection. `readBindings` resolves each channel from its binding; a
+    // channel that is unbound, or bound to a surface that is not present,
+    // returns null and the keyboard value is left alone.
+    const { values, pads } = readBindings(this.bindings);
+    this.padValues = values;
+    this.padsConnected = pads;
+
+    if (values.roll !== null && Math.abs(values.roll) > 0.02) r.x = values.roll;
+    if (values.pitch !== null && Math.abs(values.pitch) > 0.02) r.y = values.pitch;
+    if (values.yaw !== null && Math.abs(values.yaw) > 0.02) r.z = values.yaw;
+    if (values.throttle !== null) {
+      // Throttle is unidirectional in the sim (0..1), so a bipolar stick has to
+      // be mapped: centred is 0, full deflection is 1. A real Mode 2
+      // transmitter sends throttle on one axis where centre is half travel.
+      r.throttle = clamp((values.throttle + 1) / 2, 0, 1);
+    }
+
+    // Button 0 is arm, unless the pilot has bound it to a channel instead.
+    const armBound = Object.values(this.bindings)
+      .some((b) => b.kind === 'button' && b.index === 0 && b.device === 0);
+    if (!armBound) {
+      const pad0 = pads[0];
+      if (pad0 && pad0.buttons[0]) {
+        const pressed = pad0.buttons[0].pressed;
+        if (pressed && !this._padArm) {
+          this._padArm = true;
+          if (this.onArmToggle) this.onArmToggle();
+        } else if (!pressed) this._padArm = false;
       }
-      if (p.buttons[0] && !p.buttons[0].pressed) this._padArm = false;
-      break;
     }
     return r;
   }
@@ -218,7 +238,7 @@ export class Simulation {
       : { soc: 1, cycles: (spec.cycles || 0) };
     this.spec = { ...spec };
     this.craft = buildCraft(this.spec, {
-      env: this.env, tune: this.tune, physicsHz: this.physicsHz, pidDivisor: 1,
+      env: this.env, tune: this.tune, physicsHz: this.physicsHz, pidDivisor: 2,
       batteryState: keepBatt, colliders: this.colliders,
     });
     this.craft.body.pos.y = 0.09;
@@ -273,6 +293,10 @@ export class Simulation {
   reset(opts = {}) {
     const c = this.craft;
     c.body.pos = { x: opts.x != null ? opts.x : 0, y: opts.y != null ? opts.y : GEAR_HEIGHT, z: opts.z != null ? opts.z : 0 };
+    // Remember where the craft belongs, so the watchdog can put it back here
+    // without guessing. Without this, recovering from a diverged state had no
+    // reference point and the craft could not be returned to the world.
+    this.spawn = { x: c.body.pos.x, y: c.body.pos.y, z: c.body.pos.z };
     c.body.vel = { x: 0, y: 0, z: 0 };
     c.body.omega = { x: 0, y: 0, z: 0 };
     // Level is Q_LEVEL, not the identity quaternion. The body frame is
@@ -297,6 +321,52 @@ export class Simulation {
     this.input.throttleMode = mode;
   }
 
+  /**
+   * Last line of defence against losing the craft.
+   *
+   * A rigid-body sim can be driven to a non-finite or astronomically large state
+   * by a transient - a bad frame time, a deep penetration, a filter blowing up.
+   * Once that happens nothing recovers it: the camera follows the craft to
+   * infinity, so the map and the quad both vanish, and the state stays broken
+   * because every subsequent step propagates the same infinities. Reset looked
+   * like it did nothing.
+   *
+   * So: if the craft's state is not finite, or it has left a generous margin
+   * around the arena, put it back on its spawn point and say so. This is
+   * deliberately a last resort and not a substitute for fixing the cause - it is
+   * here so a numerical edge case can never cost the user the session.
+   */
+  watchdog() {
+    const b = this.craft.body;
+    const bad = !Number.isFinite(b.pos.x) || !Number.isFinite(b.pos.y)
+      || !Number.isFinite(b.pos.z) || !Number.isFinite(b.vel.x)
+      || !Number.isFinite(b.vel.y) || !Number.isFinite(b.vel.z)
+      || !Number.isFinite(b.omega.x) || !Number.isFinite(b.omega.y)
+      || !Number.isFinite(b.omega.z) || !Number.isFinite(b.quat.w);
+
+    const bounds = this.env && this.env.bounds;
+    let lost = false;
+    if (!bad && bounds && bounds.half != null) {
+      // Generous: a fast craft legitimately leaves the arena briefly, and the
+      // soft bounds themselves only start acting at `half`.
+      const limit = bounds.half * 4 + 100;
+      const limitY = (bounds.ceiling || 90) * 6 + 100;
+      lost = Math.abs(b.pos.x) > limit || Math.abs(b.pos.z) > limit
+        || b.pos.y > limitY || b.pos.y < -limit;
+    }
+
+    if (!bad && !lost) return false;
+
+    const at = this.spawn || { x: 0, y: GEAR_HEIGHT, z: 0 };
+    this.reset(at);
+    // Read by the app so it can snap the camera and report the recovery.
+    this.recovered = bad ? 'diverged' : 'lost';
+    this.log('warn', bad
+      ? 'Flight state diverged - craft recovered'
+      : 'Craft left the arena - recovered');
+    return true;
+  }
+
   /* ------------------------------------------------------------------ step */
 
   /**
@@ -316,7 +386,12 @@ export class Simulation {
       if (this.previewMode) this.previewMotors(this.craft);
       this.tick(dt, runPID);
       // The flight controller runs at a divisor of the physics rate, like real
-      // hardware running a PID loop slower than the gyro sampler.
+      // hardware running a PID loop slower than the gyro sampler. The divisor
+      // MUST match this alternation: stepCraft hands runPID `dt * pidDivisor`,
+      // so claiming 1 while actually running every second tick told the FC its
+      // loop period was half the truth. The D term differentiates against that
+      // dt and came out exactly 2x too large, which is why raising D made the
+      // tuning overshoot more instead of damping it.
       runPID = !runPID;
     }
     if (n >= MAX_SUBSTEPS) this._acc = 0;
@@ -383,6 +458,9 @@ export class Simulation {
 
     /* --- physics */
     stepCraft(craft, dt, this.env, sticks, { runPID });
+    // Immediately after integrating: a craft that has just gone non-finite
+    // must not be handed to the renderer, the camera or the RF trace.
+    if (this.watchdog()) { this.recoveredThisStep = true; return; }
 
     /* --- video link: a 5.8 GHz video receiver only needs a frame-rate update */
     this._videoAcc = (this._videoAcc || 0) + dt;
